@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 # Configurable Gemini model, defaulting to gemini-3.8-flash
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+DEFAULT_TIMEOUT_MS = 30000
+GEMINI_TIMEOUT_MS = DEFAULT_TIMEOUT_MS
+
 
 
 class AIEventPlan(BaseModel):
@@ -105,6 +108,36 @@ def _get_gemini_model() -> str:
     return DEFAULT_MODEL
 
 
+def _get_gemini_timeout_ms() -> int:
+    """Retrieve GEMINI_TIMEOUT_MS securely from environment or Streamlit secrets with safe fallback.
+
+    Guarantees a positive integer, defaulting to 30000 ms (30 seconds).
+    """
+    candidates = []
+    env_val = os.getenv("GEMINI_TIMEOUT_MS")
+    if env_val is not None and str(env_val).strip():
+        candidates.append(env_val)
+    try:
+        import streamlit as st
+
+        if hasattr(st, "secrets") and "GEMINI_TIMEOUT_MS" in st.secrets:
+            s_val = st.secrets["GEMINI_TIMEOUT_MS"]
+            if s_val is not None and str(s_val).strip():
+                candidates.append(s_val)
+    except Exception:
+        pass
+
+    for cand in candidates:
+        try:
+            val = int(str(cand).strip())
+            if val > 0:
+                return val
+        except (ValueError, TypeError):
+            continue
+
+    return DEFAULT_TIMEOUT_MS
+
+
 def is_gemini_configured() -> bool:
     """Check if GEMINI_API_KEY is present in the environment or secrets without exposing it."""
     key = _get_gemini_api_key()
@@ -167,21 +200,22 @@ def generate_event_plan(event_data: dict[str, Any]) -> dict[str, Any]:
     """Generate an AI-powered event plan using Google Gemini with robust validation.
 
     Safely falls back to deterministic curated plan if GEMINI_API_KEY is not configured
-    or if the API call experiences any network or schema issues.
+    or if the API call experiences any network, timeout, or schema issues.
     """
-    if not is_gemini_configured():
-        return _generate_fallback_plan(event_data, reason="GEMINI_API_KEY not configured in environment or secrets.")
+    try:
+        if not is_gemini_configured():
+            return _generate_fallback_plan(event_data, reason="GEMINI_API_KEY not configured in environment or secrets.")
 
-    model_name = _get_gemini_model()
+        model_name = _get_gemini_model()
 
-    location_display = (
-        event_data.get("location")
-        or event_data.get("venue")
-        or event_data.get("Location")
-        or "Not specified"
-    )
+        location_display = (
+            event_data.get("location")
+            or event_data.get("venue")
+            or event_data.get("Location")
+            or "Not specified"
+        )
 
-    prompt = f"""
+        prompt = f"""
 You are the AI Event Director for CelebrAI, a luxury celebration & event planner.
 Generate a structured, creative event design plan based on the following event specs:
 
@@ -206,70 +240,84 @@ Output strictly a JSON object with these exact keys:
 }}
 """
 
-    timeout_ms = int(os.getenv("GEMINI_TIMEOUT_MS", "15000"))  # 15s timeout
-    last_exc = None
+        timeout_ms = _get_gemini_timeout_ms()
+        last_exc = None
 
-    for attempt in range(2):
-        try:
-            from google import genai
+        for attempt in range(2):
+            try:
+                from google import genai
+                from google.genai import types
 
-            api_key = _get_gemini_api_key()
-            client = genai.Client(api_key=api_key, http_options={"timeout": timeout_ms})
+                api_key = _get_gemini_api_key()
+                client = genai.Client(api_key=api_key, http_options={"timeout": timeout_ms})
 
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config={
-                    "response_mime_type": "application/json",
-                },
-            )
+                # Configure structured JSON output with LOW thinking level for fast, reliable generation
+                content_config = types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+                )
 
-            if not response or not response.text:
-                return _generate_fallback_plan(event_data, reason="Gemini returned empty response.")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=content_config,
+                )
 
-            # Clean potential markdown fences in text
-            raw_text = response.text.strip()
-            if raw_text.startswith("```json"):
-                raw_text = raw_text[len("```json"):].strip()
-            if raw_text.startswith("```"):
-                raw_text = raw_text[len("```"):].strip()
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3].strip()
+                if not response or not response.text:
+                    return _generate_fallback_plan(event_data, reason="Gemini returned empty response.")
 
-            parsed_json = json.loads(raw_text)
-            validated_plan = AIEventPlan(**parsed_json)
-            result = validated_plan.model_dump()
-            result["_generation_mode"] = f"Gemini ({model_name})"
-            return result
+                # Clean potential markdown fences in text
+                raw_text = response.text.strip()
+                if raw_text.startswith("```json"):
+                    raw_text = raw_text[len("```json"):].strip()
+                if raw_text.startswith("```"):
+                    raw_text = raw_text[len("```"):].strip()
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3].strip()
 
-        except ValidationError as val_err:
-            logger.warning("AI output schema validation error: %s", val_err)
-            return _generate_fallback_plan(event_data, reason="Schema validation mismatch. Using deterministic planning engine.")
-        except Exception as exc:
-            last_exc = exc
-            exc_str = str(exc)
-            exc_type = type(exc).__name__
-            logger.warning("AI generation attempt %d failed: %s", attempt + 1, exc_type)
-            # If the error is high demand / 503 or timeout, break early to prevent long user wait
+                parsed_json = json.loads(raw_text)
+                validated_plan = AIEventPlan(**parsed_json)
+                result = validated_plan.model_dump()
+                result["_generation_mode"] = f"Gemini ({model_name})"
+                return result
+
+            except ValidationError as val_err:
+                logger.warning("AI output schema validation error: %s", type(val_err).__name__)
+                return _generate_fallback_plan(event_data, reason="Schema validation mismatch. Using deterministic planning engine.")
+            except Exception as exc:
+                last_exc = exc
+                exc_str = str(exc)
+                exc_type = type(exc).__name__
+                logger.warning("AI generation attempt %d failed: %s", attempt + 1, exc_type)
+                # If the error is high demand / 503, 504 / deadline exceeded, or timeout, break early to prevent long user wait
+                if "503" in exc_str or "unavailable" in exc_str.lower() or "high demand" in exc_str.lower():
+                    break
+                if "504" in exc_str or "deadline_exceeded" in exc_str.lower() or "deadline expired" in exc_str.lower():
+                    break
+                if "timeout" in exc_type.lower() or "timeout" in exc_str.lower():
+                    break
+
+        # Determine concise, honest, safe fallback reason
+        if last_exc:
+            exc_str = str(last_exc)
             if "503" in exc_str or "unavailable" in exc_str.lower() or "high demand" in exc_str.lower():
-                break
-            if "timeout" in exc_type.lower() or "timeout" in exc_str.lower():
-                break
-
-    # Determine concise, honest, safe fallback reason
-    if last_exc:
-        exc_str = str(last_exc)
-        if "503" in exc_str or "unavailable" in exc_str.lower() or "high demand" in exc_str.lower():
-            fallback_reason = "Google Gemini model temporarily experiencing high demand (503 Service Unavailable). Using deterministic planning engine."
-        elif "timeout" in type(last_exc).__name__.lower() or "timeout" in exc_str.lower():
-            fallback_reason = "Google Gemini request timed out. Using deterministic planning engine."
-        elif "429" in exc_str or "quota" in exc_str.lower():
-            fallback_reason = "Gemini API rate limit or quota exceeded (429). Using deterministic planning engine."
+                fallback_reason = "Google Gemini model temporarily experiencing high demand (503 Service Unavailable). Using deterministic planning engine."
+            elif "504" in exc_str or "deadline_exceeded" in exc_str.lower() or "deadline expired" in exc_str.lower():
+                fallback_reason = "Google Gemini request timed out (504 Deadline Exceeded). Using deterministic planning engine."
+            elif "timeout" in type(last_exc).__name__.lower() or "timeout" in exc_str.lower():
+                fallback_reason = "Google Gemini request timed out. Using deterministic planning engine."
+            elif "429" in exc_str or "quota" in exc_str.lower():
+                fallback_reason = "Gemini API rate limit or quota exceeded (429). Using deterministic planning engine."
+            elif isinstance(last_exc, json.JSONDecodeError):
+                fallback_reason = "Gemini response contained malformed JSON. Using deterministic planning engine."
+            else:
+                fallback_reason = f"Gemini API ({type(last_exc).__name__}). Using deterministic planning engine."
         else:
-            fallback_reason = f"Gemini API ({type(last_exc).__name__}). Using deterministic planning engine."
-    else:
-        fallback_reason = "Gemini service unavailable. Using deterministic planning engine."
+            fallback_reason = "Gemini service unavailable. Using deterministic planning engine."
 
-    return _generate_fallback_plan(event_data, reason=fallback_reason)
+        return _generate_fallback_plan(event_data, reason=fallback_reason)
+    except Exception as outer_exc:
+        logger.warning("Unexpected error during event plan generation: %s", type(outer_exc).__name__)
+        return _generate_fallback_plan(event_data, reason="Unexpected error during AI generation. Using deterministic planning engine.")
 
 

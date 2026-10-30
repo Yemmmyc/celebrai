@@ -71,3 +71,251 @@ def test_streamlit_secrets_retrieval(monkeypatch):
     assert _get_gemini_api_key() == "test-key-from-secrets"
     assert _get_gemini_model() == "gemini-test-model"
 
+
+def test_gemini_timeout_resolution(monkeypatch):
+    """Verify timeout retrieval hierarchy, defaults to 30000ms, and validates safely."""
+    from services.ai_service import _get_gemini_timeout_ms, DEFAULT_TIMEOUT_MS
+
+    assert DEFAULT_TIMEOUT_MS == 30000
+
+    # 1. Default when unset
+    monkeypatch.delenv("GEMINI_TIMEOUT_MS", raising=False)
+    import streamlit as st
+    monkeypatch.setattr(st, "secrets", {})
+    assert _get_gemini_timeout_ms() == 30000
+
+    # 2. Environment variable override
+    monkeypatch.setenv("GEMINI_TIMEOUT_MS", "45000")
+    assert _get_gemini_timeout_ms() == 45000
+
+    # 3. Streamlit secrets override when env unset
+    monkeypatch.delenv("GEMINI_TIMEOUT_MS", raising=False)
+    monkeypatch.setattr(st, "secrets", {"GEMINI_TIMEOUT_MS": "25000"})
+    assert _get_gemini_timeout_ms() == 25000
+
+    # 4. Safe fallback on non-integer or non-positive values (with no valid secrets)
+    monkeypatch.setattr(st, "secrets", {})
+    monkeypatch.setenv("GEMINI_TIMEOUT_MS", "invalid_number")
+    assert _get_gemini_timeout_ms() == 30000
+
+    monkeypatch.setenv("GEMINI_TIMEOUT_MS", "-5000")
+    assert _get_gemini_timeout_ms() == 30000
+
+    monkeypatch.setenv("GEMINI_TIMEOUT_MS", "0")
+    assert _get_gemini_timeout_ms() == 30000
+
+    # 5. Invalid env var falls back to valid Streamlit secrets
+    monkeypatch.setenv("GEMINI_TIMEOUT_MS", "not-a-number")
+    monkeypatch.setattr(st, "secrets", {"GEMINI_TIMEOUT_MS": "35000"})
+    assert _get_gemini_timeout_ms() == 35000
+
+
+def test_thinking_configuration_structure():
+    """Verify GenerateContentConfig builds with LOW thinking level without errors."""
+    from google.genai import types
+
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+    )
+    assert config.response_mime_type == "application/json"
+    assert str(config.thinking_config.thinking_level).upper() in ["LOW", "THINKINGLEVEL.LOW"]
+
+
+def test_generate_event_plan_mocked_success(monkeypatch):
+    """Verify generate_event_plan parses valid Gemini JSON and tags generation mode."""
+    from services.ai_service import generate_event_plan
+    import json
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-test-key-for-mocking")
+
+    valid_json_payload = json.dumps({
+        "theme_concept": "Starlit Glasshouse",
+        "theme_description": "An ethereal evening under glowing glass arches.",
+        "color_palette": ["Gold", "Plum", "Ivory", "Emerald"],
+        "decor_highlights": ["Fairy lights", "Candles", "Monstera runners"],
+        "menu_suggestions": ["Spiced Cider", "Truffle Arancini", "Lemon Tart"],
+        "entertainment_ideas": ["Acoustic Duo", "Polaroid Wall"],
+        "planner_pro_tips": ["Pre-light candles early", "Check coat check staffing"],
+    })
+
+    class MockResponse:
+        text = valid_json_payload
+
+    class MockModels:
+        def generate_content(self, model, contents, config):
+            assert config.thinking_config.thinking_level == "LOW" or str(config.thinking_config.thinking_level) == "ThinkingLevel.LOW"
+            return MockResponse()
+
+    class MockClient:
+        def __init__(self, api_key=None, http_options=None):
+            assert http_options.get("timeout") == 30000
+            self.models = MockModels()
+
+    from google import genai
+    monkeypatch.setattr(genai, "Client", MockClient)
+
+    event_data = {
+        "name": "Celebration Gala",
+        "event_type": "Corporate Gala",
+        "date": "2026-12-31",
+        "location": "London",
+        "guest_count": 100,
+        "budget": 10000.0,
+    }
+
+    result = generate_event_plan(event_data)
+    assert result["_generation_mode"] == "Gemini (gemini-3.8-flash)"
+    assert result["theme_concept"] == "Starlit Glasshouse"
+    assert len(result["color_palette"]) == 4
+
+
+def test_generate_event_plan_fallback_on_504(monkeypatch):
+    """Verify that a 504 Deadline Exceeded exception gracefully triggers deterministic fallback."""
+    from services.ai_service import generate_event_plan
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-test-key-for-mocking")
+
+    class MockModels:
+        def generate_content(self, model, contents, config):
+            raise Exception("504 DEADLINE_EXCEEDED: Deadline expired before operation could complete.")
+
+    class MockClient:
+        def __init__(self, api_key=None, http_options=None):
+            self.models = MockModels()
+
+    from google import genai
+    monkeypatch.setattr(genai, "Client", MockClient)
+
+    event_data = {
+        "name": "Elena's Birthday",
+        "event_type": "Birthday",
+        "date": "2026-11-15",
+        "location": "London",
+        "guest_count": 30,
+        "budget": 4000.0,
+        "theme": "Botanical Gold",
+    }
+
+    result = generate_event_plan(event_data)
+    assert result["_generation_mode"] == "Deterministic Fallback"
+    assert "504 Deadline Exceeded" in result["_fallback_reason"]
+    assert "Botanical Gold" in result["theme_concept"]
+
+
+def test_generate_event_plan_fallback_on_503(monkeypatch):
+    """Verify that a 503 High Demand / Service Unavailable gracefully triggers deterministic fallback."""
+    from services.ai_service import generate_event_plan
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-test-key-for-mocking")
+
+    class MockModels:
+        def generate_content(self, model, contents, config):
+            raise Exception("503 Service Unavailable: Model is overloaded due to high demand.")
+
+    class MockClient:
+        def __init__(self, api_key=None, http_options=None):
+            self.models = MockModels()
+
+    from google import genai
+    monkeypatch.setattr(genai, "Client", MockClient)
+
+    event_data = {"name": "Summer Soiree", "event_type": "Party", "theme": "Riviera Chic"}
+    result = generate_event_plan(event_data)
+    assert result["_generation_mode"] == "Deterministic Fallback"
+    assert "503 Service Unavailable" in result["_fallback_reason"]
+
+
+def test_generate_event_plan_fallback_on_429(monkeypatch):
+    """Verify that a 429 Rate Limit / Quota Exceeded gracefully triggers deterministic fallback."""
+    from services.ai_service import generate_event_plan
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-test-key-for-mocking")
+
+    class MockModels:
+        def generate_content(self, model, contents, config):
+            raise Exception("429 ResourceExhausted: Quota exceeded for quota metric.")
+
+    class MockClient:
+        def __init__(self, api_key=None, http_options=None):
+            self.models = MockModels()
+
+    from google import genai
+    monkeypatch.setattr(genai, "Client", MockClient)
+
+    event_data = {"name": "Winter Ball", "event_type": "Gala", "theme": "Frost & Velvet"}
+    result = generate_event_plan(event_data)
+    assert result["_generation_mode"] == "Deterministic Fallback"
+    assert "429" in result["_fallback_reason"]
+
+
+def test_generate_event_plan_fallback_on_malformed_json(monkeypatch):
+    """Verify that malformed JSON from the API triggers clean deterministic fallback."""
+    from services.ai_service import generate_event_plan
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-test-key-for-mocking")
+
+    class MockResponse:
+        text = "This is not valid JSON at all {broken"
+
+    class MockModels:
+        def generate_content(self, model, contents, config):
+            return MockResponse()
+
+    class MockClient:
+        def __init__(self, api_key=None, http_options=None):
+            self.models = MockModels()
+
+    from google import genai
+    monkeypatch.setattr(genai, "Client", MockClient)
+
+    event_data = {"name": "Art Exhibition", "event_type": "Exhibition", "theme": "Minimalist Light"}
+    result = generate_event_plan(event_data)
+    assert result["_generation_mode"] == "Deterministic Fallback"
+    assert "malformed JSON" in result["_fallback_reason"]
+
+
+def test_generate_event_plan_fallback_on_schema_mismatch(monkeypatch):
+    """Verify that missing required keys or invalid schema types trigger schema fallback."""
+    from services.ai_service import generate_event_plan
+    import json
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-test-key-for-mocking")
+
+    # Missing expected fields or invalid types
+    class MockResponse:
+        text = json.dumps({"color_palette": "Not a list, this is a string"})
+
+    class MockModels:
+        def generate_content(self, model, contents, config):
+            return MockResponse()
+
+    class MockClient:
+        def __init__(self, api_key=None, http_options=None):
+            self.models = MockModels()
+
+    from google import genai
+    monkeypatch.setattr(genai, "Client", MockClient)
+
+    event_data = {"name": "Fashion Show", "event_type": "Runway", "theme": "High Fashion"}
+    result = generate_event_plan(event_data)
+    assert result["_generation_mode"] == "Deterministic Fallback"
+    assert "Schema validation mismatch" in result["_fallback_reason"]
+
+
+def test_generate_event_plan_never_crashes(monkeypatch):
+    """Verify that catastrophic unexpected exceptions are handled safely without crashing."""
+    from services.ai_service import generate_event_plan
+
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-test-key-for-mocking")
+
+    def crashing_func(*args, **kwargs):
+        raise RuntimeError("Catastrophic unexpected runtime error")
+
+    from google import genai
+    monkeypatch.setattr(genai, "Client", crashing_func)
+
+    event_data = {"name": "Resilience Test", "event_type": "Test"}
+    result = generate_event_plan(event_data)
+    assert result["_generation_mode"] == "Deterministic Fallback"
+    assert "deterministic planning engine" in result["_fallback_reason"].lower()
