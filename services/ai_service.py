@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from typing import Any
 
 from dotenv import load_dotenv
@@ -215,9 +216,8 @@ def generate_event_plan(event_data: dict[str, Any]) -> dict[str, Any]:
             or "Not specified"
         )
 
-        prompt = f"""
-You are the AI Event Director for CelebrAI, a luxury celebration & event planner.
-Generate a structured, creative event design plan based on the following event specs:
+        prompt = f"""You are the AI Event Director for CelebrAI, a luxury celebration & event planner.
+Generate a concise, creative event design plan for the following celebration:
 
 - Event Type: {event_data.get('event_type')}
 - Event Name: {event_data.get('name')}
@@ -228,22 +228,28 @@ Generate a structured, creative event design plan based on the following event s
 - Desired Theme / Vibe: {event_data.get('theme', 'Not specified')}
 - Host Preferences & Notes: {event_data.get('preferences', 'None')}
 
-Output strictly a JSON object with these exact keys:
+Guidelines for concise generation:
+- Keep theme_description to approximately two brief, evocative sentences setting mood and lighting.
+- Keep every list item to exactly one concise, punchy sentence.
+- Avoid unnecessary elaboration, repetitive descriptions, and preambles.
+- Return valid JSON directly matching the exact keys below.
+
+JSON output structure:
 {{
-  "theme_concept": "Creative title of the concept (string)",
-  "theme_description": "2-3 evocative sentences describing the mood, lighting, and vibe (string)",
-  "color_palette": ["Color 1 with hex/notes", "Color 2", "Color 3", "Color 4"],
-  "decor_highlights": ["Decor idea 1", "Decor idea 2", "Decor idea 3"],
-  "menu_suggestions": ["Signature beverage", "Culinary highlight 1", "Culinary highlight 2"],
-  "entertainment_ideas": ["Guest experience 1", "Guest experience 2"],
-  "planner_pro_tips": ["Expert planning tip 1", "Expert planning tip 2"]
-}}
-"""
+  "theme_concept": "Bespoke creative title for the celebration aesthetic",
+  "theme_description": "Two brief evocative sentences describing mood, lighting, and ambiance.",
+  "color_palette": ["Color 1 with hex code", "Color 2 with hex code", "Color 3 with hex code", "Color 4 with hex code"],
+  "decor_highlights": ["Decor highlight 1 in one concise sentence.", "Decor highlight 2 in one concise sentence.", "Decor highlight 3 in one concise sentence."],
+  "menu_suggestions": ["Signature welcome cocktail or mocktail.", "First culinary highlight in one concise sentence.", "Second culinary highlight in one concise sentence."],
+  "entertainment_ideas": ["First interactive guest experience in one concise sentence.", "Second entertainment feature in one concise sentence."],
+  "planner_pro_tips": ["First expert planner tip in one concise sentence.", "Second expert planner tip in one concise sentence."]
+}}"""
 
         timeout_ms = _get_gemini_timeout_ms()
         last_exc = None
 
         for attempt in range(2):
+            t_start = time.perf_counter()
             try:
                 from google import genai
                 from google.genai import types
@@ -261,6 +267,15 @@ Output strictly a JSON object with these exact keys:
                     model=model_name,
                     contents=prompt,
                     config=content_config,
+                )
+
+                elapsed_sec = round(time.perf_counter() - t_start, 2)
+                logger.info(
+                    "AI generation succeeded in %.2fs (model=%s, timeout_ms=%d, attempt=%d)",
+                    elapsed_sec,
+                    model_name,
+                    timeout_ms,
+                    attempt + 1,
                 )
 
                 if not response or not response.text:
@@ -282,13 +297,27 @@ Output strictly a JSON object with these exact keys:
                 return result
 
             except ValidationError as val_err:
-                logger.warning("AI output schema validation error: %s", type(val_err).__name__)
+                elapsed_sec = round(time.perf_counter() - t_start, 2)
+                logger.warning(
+                    "AI output schema validation error after %.2fs: %s (model=%s)",
+                    elapsed_sec,
+                    type(val_err).__name__,
+                    model_name,
+                )
                 return _generate_fallback_plan(event_data, reason="Schema validation mismatch. Using deterministic planning engine.")
             except Exception as exc:
+                elapsed_sec = round(time.perf_counter() - t_start, 2)
                 last_exc = exc
                 exc_str = str(exc)
                 exc_type = type(exc).__name__
-                logger.warning("AI generation attempt %d failed: %s", attempt + 1, exc_type)
+                logger.warning(
+                    "AI generation attempt %d failed after %.2fs: %s (model=%s, timeout_ms=%d)",
+                    attempt + 1,
+                    elapsed_sec,
+                    exc_type,
+                    model_name,
+                    timeout_ms,
+                )
                 # If the error is high demand / 503, 504 / deadline exceeded, or timeout, break early to prevent long user wait
                 if "503" in exc_str or "unavailable" in exc_str.lower() or "high demand" in exc_str.lower():
                     break

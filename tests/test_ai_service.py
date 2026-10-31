@@ -122,12 +122,79 @@ def test_thinking_configuration_structure():
     assert str(config.thinking_config.thinking_level).upper() in ["LOW", "THINKINGLEVEL.LOW"]
 
 
-def test_generate_event_plan_mocked_success(monkeypatch):
-    """Verify generate_event_plan parses valid Gemini JSON and tags generation mode."""
+def test_concise_prompt_instructions(monkeypatch):
+    """Verify that generation prompt contains concise guidance and preserves all 7 schema fields."""
     from services.ai_service import generate_event_plan
     import json
 
     monkeypatch.setenv("GEMINI_API_KEY", "fake-test-key-for-mocking")
+    captured_contents = []
+
+    valid_json_payload = json.dumps({
+        "theme_concept": "Starlit Glasshouse",
+        "theme_description": "An ethereal evening under glowing glass arches.",
+        "color_palette": ["Gold", "Plum", "Ivory", "Emerald"],
+        "decor_highlights": ["Fairy lights", "Candles", "Monstera runners"],
+        "menu_suggestions": ["Spiced Cider", "Truffle Arancini", "Lemon Tart"],
+        "entertainment_ideas": ["Acoustic Duo", "Polaroid Wall"],
+        "planner_pro_tips": ["Pre-light candles early", "Check coat check staffing"],
+    })
+
+    class MockResponse:
+        text = valid_json_payload
+
+    class MockModels:
+        def generate_content(self, model, contents, config):
+            captured_contents.append(contents)
+            return MockResponse()
+
+    class MockClient:
+        def __init__(self, api_key=None, http_options=None):
+            self.models = MockModels()
+
+    from google import genai
+    monkeypatch.setattr(genai, "Client", MockClient)
+
+    event_data = {
+        "name": "Concise Test Gala",
+        "event_type": "Anniversary",
+        "date": "2026-11-20",
+        "location": "Skyline Lounge",
+        "guest_count": 60,
+        "budget": 7500.0,
+        "theme": "Modern Luxe",
+    }
+
+    generate_event_plan(event_data)
+    assert len(captured_contents) == 1
+    prompt = captured_contents[0]
+
+    # Verify concise prompt directives
+    assert "approximately two brief, evocative sentences" in prompt
+    assert "exactly one concise, punchy sentence" in prompt
+    assert "Avoid unnecessary elaboration" in prompt
+    assert "Return valid JSON directly" in prompt
+
+    # Verify all 7 required schema fields are requested in prompt
+    for field in [
+        "theme_concept",
+        "theme_description",
+        "color_palette",
+        "decor_highlights",
+        "menu_suggestions",
+        "entertainment_ideas",
+        "planner_pro_tips",
+    ]:
+        assert f'"{field}"' in prompt
+
+
+def test_generate_event_plan_mocked_success(monkeypatch, caplog):
+    """Verify generate_event_plan parses valid Gemini JSON, tags mode, and logs safe timing."""
+    import logging
+    from services.ai_service import generate_event_plan
+    import json
+
+    monkeypatch.setenv("GEMINI_API_KEY", "secret-test-api-key-xyz123")
 
     valid_json_payload = json.dumps({
         "theme_concept": "Starlit Glasshouse",
@@ -164,10 +231,20 @@ def test_generate_event_plan_mocked_success(monkeypatch):
         "budget": 10000.0,
     }
 
-    result = generate_event_plan(event_data)
+    with caplog.at_level(logging.INFO):
+        result = generate_event_plan(event_data)
+
     assert result["_generation_mode"] == "Gemini (gemini-3.8-flash)"
     assert result["theme_concept"] == "Starlit Glasshouse"
     assert len(result["color_palette"]) == 4
+
+    # Verify safe timing diagnostics in logs
+    log_text = caplog.text
+    assert "AI generation succeeded in" in log_text
+    assert "model=gemini-3.8-flash" in log_text
+    assert "timeout_ms=30000" in log_text
+    assert "secret-test-api-key-xyz123" not in log_text
+    assert "AIza" not in log_text
 
 
 def test_generate_event_plan_fallback_on_504(monkeypatch):
