@@ -6,7 +6,8 @@
 [![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Framework](https://img.shields.io/badge/Streamlit-1.40%2B-FF4B4B.svg)](https://streamlit.io/)
 [![AI Engine](https://img.shields.io/badge/Google%20GenAI-Gemini%203.8%20Flash-8E75C2.svg)](https://aistudio.google.com/)
-[![Tests](https://img.shields.io/badge/Test%20Suite-37%20Passed-2E6F68.svg)](tests/)
+[![Tests](https://img.shields.io/badge/Test%20Suite-47%20Passed-2E6F68.svg)](tests/)
+[![Live Demo](https://img.shields.io/badge/Streamlit%20Cloud-Live%20Application-FF4B4B.svg)](https://celebrai.streamlit.app/)
 [![Repository](https://img.shields.io/badge/GitHub-Yemmmyc%2Fcelebrai-black.svg)](https://github.com/Yemmmyc/celebrai)
 
 ---
@@ -23,7 +24,7 @@
 8. [Prerequisites](#prerequisites)
 9. [Local Installation & Startup](#local-installation--startup)
 10. [Environment Variables & Configuration](#environment-variables--configuration)
-11. [AI Integration & Dual-Mode Engine](#ai-integration--dual-mode-engine)
+11. [Gemini AI Availability and Resilient Fallback](#gemini-ai-availability-and-resilient-fallback)
 12. [Financial Precision & Multi-Currency Handling](#financial-precision--multi-currency-handling)
 13. [Database & Persistence Model](#database--persistence-model)
 14. [Testing & Quality Assurance](#testing--quality-assurance)
@@ -333,9 +334,9 @@ CelebrAI supports flexible configuration via local `.env` files, shell environme
 
 | Variable Name | Required? | Default Value | Description |
 |---|---|---|---|
-| `GEMINI_API_KEY` | Optional | `None` | Google Gemini API key. If absent, fallback planner activates automatically. |
-| `GEMINI_MODEL` | Optional | `gemini-3.8-flash` | The Gemini model identifier used for creative generation. Check your Google AI Studio account for currently supported models (e.g. `gemini-2.5-flash` or `gemini-1.5-flash`). |
-| `GEMINI_TIMEOUT_MS` | Optional | `15000` | HTTP request timeout in milliseconds (15 seconds default). |
+| `GEMINI_API_KEY` | Optional | `None` | Google Gemini API key. If absent, fallback planner activates automatically. Never commit actual keys. |
+| `GEMINI_MODEL` | Optional | `gemini-3.8-flash` | The Gemini model identifier used for creative generation. Overridable via `.env` or Streamlit secrets. |
+| `GEMINI_TIMEOUT_MS` | Optional | `30000` | HTTP request timeout in milliseconds. Defaults to 30,000 ms (30s) locally; configured to 45,000 ms (45s) in Streamlit Cloud secrets. |
 | `CELEBRAI_DB_PATH` | Optional | `celebrai.db` in project root | Absolute or relative path to the SQLite persistence database. |
 
 ### Streamlit Secrets (`.streamlit/secrets.toml`)
@@ -344,28 +345,54 @@ When deploying to Streamlit Community Cloud, secrets can be provided via the UI 
 # .streamlit/secrets.toml (Excluded from git)
 GEMINI_API_KEY = "your_actual_gemini_api_key_here"
 GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_TIMEOUT_MS = "45000"
 ```
 
-[`_get_gemini_api_key()`](services/ai_service.py) prioritizes environment variables first, then falls back cleanly to `st.secrets` if running inside Streamlit.
+[`_get_gemini_api_key()`](services/ai_service.py) prioritizes environment variables first, then falls back cleanly to `st.secrets` if running inside Streamlit. Never commit actual API keys or secrets to version control.
+
+> [!NOTE]
+> **Timeout Decoupling: Local vs. Cloud Settings**
+> - **Local Development**: Defaults to `30000` ms (30 seconds via [`DEFAULT_TIMEOUT_MS`](services/ai_service.py#L26)), which can be overridden via `GEMINI_TIMEOUT_MS` in `.env`.
+> - **Streamlit Community Cloud Deployment**: Configured explicitly to `45000` ms (45 seconds) via Streamlit Cloud Secrets to account for container network transit and API latency before activating fallback.
+> - Local and cloud timeout configurations are intentionally separate and must not be assumed to be identical.
 
 ---
 
-## 🤖 AI Integration & Dual-Mode Engine
+## 🤖 Gemini AI Availability and Resilient Fallback
 
-### Google Gemini Integration Details
-- **SDK**: Google GenAI SDK (`google.genai`).
-- **Default Model**: `gemini-3.8-flash` (configured in `services/ai_service.py`). The model identifier should be verified against your Google AI Studio account's available models and quotas; it can be overridden at any time via `GEMINI_MODEL` in `.env` or Streamlit secrets.
-- **Prompt Architecture**: Sends explicit celebration specs (type, name, date, venue, guest count, budget, theme, notes) requiring strict JSON conforming to `AIEventPlan`.
-- **Response Sanitization**: Automatically strips markdown fences (````json ... ````) before passing payload to Pydantic.
-- **Retry & Error Handling**:
-  - Implements a 2-attempt loop with timeout protection.
-  - Intercepts `503 Service Unavailable` / `high demand` errors and breaks immediately to prevent freezing the user interface.
-  - Transparently flags the generation mode in the saved event dossier (e.g. `Gemini (gemini-3.8-flash)` vs `Deterministic Fallback`).
+CelebrAI pairs creative generative intelligence with a resilient dual-mode architecture.
 
-### The Deterministic Fallback Engine
-If Gemini is unavailable or the user is working offline:
-- [`_generate_fallback_plan()`](services/ai_service.py) generates a complete event design dossier based on the event category and theme keywords.
-- Ensures that celebration creation can proceed without external network dependencies if Gemini is unconfigured or returns an error.
+### Model Configuration & Structured Output
+- **Configured Model**: `gemini-3.8-flash` via the official Google GenAI SDK (`google.genai`). The model identifier can be customized via the `GEMINI_MODEL` environment variable or Streamlit secret.
+- **Thinking Configuration**: Structured JSON generation uses `thinking_level="LOW"` (`types.ThinkingConfig(thinking_level="LOW")`). Testing confirmed that `thinking_level="MINIMAL"` is rejected by Gemini 3.8 Flash with `HTTP 400 INVALID_ARGUMENT`, whereas `"LOW"` is natively supported and maintains rapid generation speeds.
+- **Concise Output Prompting**: The system prompt provides strict length directives (for example, limiting theme descriptions to two evocative sentences and styling items to concise one-line specifications). This reduces token generation overhead, optimizes response latency, and minimizes timeout exposure.
+- **Seven-Field Pydantic Schema**: All AI-generated responses are validated against the [`AIEventPlan`](services/ai_service.py#L31) schema containing seven structured fields:
+  1. `theme_concept` (Creative evocative title)
+  2. `theme_description` (2-3 sentence overview setting mood, lighting, and ambiance)
+  3. `color_palette` (List of 4 curated color swatches with descriptive hex tones)
+  4. `decor_highlights` (List of 3 signature tactile staging and decor concepts)
+  5. `menu_suggestions` (Signature welcome cocktail/mocktail and 2 culinary tasting items)
+  6. `entertainment_ideas` (List of 2 interactive guest experiences)
+  7. `planner_pro_tips` (List of 2 actionable expert coordinator tips)
+- **Response Sanitization**: Markdown fences (````json ... ````) are automatically stripped before passing payload to Pydantic validation.
+
+### Live Testing Observations & Upstream API Availability
+- **Observed External Status Codes**: During live end-to-end testing and production deployment, requests have encountered:
+  - `HTTP 503 UNAVAILABLE`: *Google Gemini model temporarily experiencing high demand.*
+  - `HTTP 504 DEADLINE_EXCEEDED`: Upstream deadline exceeded during peak load.
+- **Diagnostic API Verification**: Controlled diagnostic tests confirmed that during observed periods of Google backend capacity saturation, both a minimal baseline text-generation request (`"Reply with OK"`) and the full structured event-generation request encountered 504 timeout errors.
+- **External Provider Reality**: These errors are external API availability, capacity, and deadline limitations on Google's infrastructure. CelebrAI does not claim that the application has permanently resolved these external service fluctuations. Availability is intermittent and varies based on upstream Google service conditions; when capacity permits, generation succeeds normally.
+
+### Single-Attempt Architecture & Retry Policy
+- **One Request Per Action**: To guarantee predictable user experience, CelebrAI makes exactly **one** Gemini generation request per user action.
+- **Automatic Retries Intentionally Disabled**: Automatic retries for HTTP 503 and HTTP 504 are **intentionally disabled**. When upstream servers are saturated, retrying compounds queue delays and leaves users waiting in front of prolonged loading indicators. Instead, after the single request attempt fails or reaches the configured timeout (45 seconds in Streamlit Community Cloud; 30 seconds locally), CelebrAI transitions directly to fallback planning without triggering repeated retry cycles.
+
+### Resilient Deterministic Fallback Planning Engine
+- **Seamless Local Fallback**: When Gemini generation fails (upon receiving an HTTP 503 response, reaching the configured request timeout of 45 seconds in Streamlit Community Cloud / 30 seconds locally, network disconnection, or when an API key is unconfigured), CelebrAI activates its built-in deterministic, rule-based planning engine ([`_generate_fallback_plan()`](services/ai_service.py)).
+- **Complete Seven-Field Dossier**: The fallback engine synthesizes theme keywords, event category, guest count, and venue context to produce a complete celebration plan preserving all seven required schema fields.
+- **Reliable SQLite Persistence**: The event and its generated plan (whether AI-generated or deterministic fallback) are safely written to SQLite along with child budget breakdowns, timelines, and vendor items.
+- **Transparent Distinction**: The UI clearly distinguishes AI-generated plans (`Gemini (gemini-3.8-flash)`) from deterministic fallback plans (`Deterministic Fallback`), displaying the exact honest reason (e.g., *"Google Gemini model temporarily experiencing high demand (503 Service Unavailable). Using deterministic planning engine."*).
+- **Core Resilience Feature**: This dual-mode engine is a primary resilience feature of CelebrAI, ensuring hosts can plan, budget, and organize their celebrations without being blocked by third-party cloud outages.
 
 ---
 
@@ -442,7 +469,7 @@ CREATE TABLE IF NOT EXISTS vendor_items (... REFERENCES events(id) ON DELETE CAS
 
 ## 🧪 Testing & Quality Assurance
 
-CelebrAI includes an extensive automated test suite covering units, database transactions, input validation boundaries, currency math, and security leakage prevention.
+CelebrAI includes an extensive automated test suite covering units, database transactions, input validation boundaries, currency math, schema conformance, and security leakage prevention.
 
 ### Execute Tests
 Run the test suite from the repository root:
@@ -452,8 +479,8 @@ python -m pytest -q
 
 **Last Recorded Test Result (Verified October 2026):**
 ```text
-.....................................                                    [100%]
-37 passed in 11.35s
+...............................................                          [100%]
+47 passed, 1 warning in 43.52s
 ```
 
 ### Verify Dependency Consistency
@@ -468,40 +495,42 @@ No broken requirements found.
 ### Test Suite Breakdown
 | Test File | Test Count | Scope |
 |---|---|---|
-| [`tests/test_ai_service.py`](tests/test_ai_service.py) | 4 | Pydantic schema validation, fallback plans, secret leakage prevention, Streamlit secrets resolution. |
+| [`tests/test_ai_service.py`](tests/test_ai_service.py) | 14 | Pydantic schema validation, 7-field structure, fallback generation, secret masking, secrets resolution, timeout parsing, thinking configuration. |
 | [`tests/test_app.py`](tests/test_app.py) | 1 | Module imports, top-level function existence, clean headless loading. |
-| [`tests/test_database.py`](tests/test_database.py) | 11 | SQLite initialization, CRUD operations, foreign key cascades, metrics aggregation, multi-currency KPIs. |
+| [`tests/test_database.py`](tests/test_database.py) | 7 | SQLite initialization, CRUD operations, foreign key cascades, metrics aggregation, multi-currency KPIs. |
 | [`tests/test_planner.py`](tests/test_planner.py) | 14 | Penny-precision rounding, currency formatting, timeline generation, vendor checklists, currency grouping. |
-| [`tests/test_validation.py`](tests/test_validation.py) | 7 | String whitespace handling, guest count limits, budget thresholds, date format boundaries, currency validation. |
+| [`tests/test_validation.py`](tests/test_validation.py) | 11 | String whitespace handling, guest count limits, budget thresholds, date format boundaries, currency validation. |
 
 ---
 
 ## ☁️ Deployment Guide (Streamlit Community Cloud)
 
-CelebrAI is structured for deployment on **Streamlit Community Cloud**:
+CelebrAI is deployed and operational on **Streamlit Community Cloud**:
 
 > [!NOTE]
-> **Deployment Status**: *Pending publication.* The steps below document the configuration required to deploy this repository.
+> **Deployment Status**: **Live & Operational** at [https://celebrai.streamlit.app/](https://celebrai.streamlit.app/)<br>
+> Deployed from public GitHub repository [`Yemmmyc/celebrai`](https://github.com/Yemmmyc/celebrai) on the `main` branch (Latest published commit: [`8eb0f3ff96495467130ccf03f1c4303b8621eff3`](https://github.com/Yemmmyc/celebrai/commit/8eb0f3ff96495467130ccf03f1c4303b8621eff3)).
 
-### Step-by-Step Deployment
+### Step-by-Step Deployment Configuration
 1. **Fork or Push to GitHub**:
    Ensure your code is published to a public repository (e.g., `https://github.com/Yemmmyc/celebrai`) on the `main` branch.
 2. **Access Streamlit Cloud**:
    Sign in to [share.streamlit.io](https://share.streamlit.io/) with your GitHub account.
-3. **Configure New App**:
+3. **Configure App Parameters**:
    - **Repository**: `Yemmmyc/celebrai`
    - **Branch**: `main`
    - **Main file path**: `app.py`
 4. **Configure Secrets**:
-   Click **Advanced settings** > **Secrets** and paste:
+   Click **Advanced settings** > **Secrets** and configure:
    ```toml
    GEMINI_API_KEY = "your_actual_gemini_api_key_here"
    GEMINI_MODEL = "gemini-3.8-flash"
+   GEMINI_TIMEOUT_MS = "45000"
    ```
 5. **Deploy**:
-   Click **Deploy!** The platform installs dependencies from `requirements.txt` and starts the application.
-6. **Ephemeral Storage Notice**:
-   Because SQLite stores data on the container's ephemeral disk, database records reset when the application restarts, sleeps, or is redeployed on Streamlit Community Cloud.
+   Click **Deploy!** The platform installs dependencies from `requirements.txt` and boots the application.
+6. **Ephemeral Storage in Public Deployment**:
+   Standard Streamlit Community Cloud containers utilize an ephemeral filesystem. SQLite initializes tables automatically on startup via [`init_db()`](services/database.py). However, event records persist during active sessions but reset whenever the container is restarted, redeployed, or put to sleep by the platform.
 
 ---
 
@@ -510,17 +539,19 @@ CelebrAI is structured for deployment on **Streamlit Community Cloud**:
 - **Secret Masking**: [`get_ai_status()`](services/ai_service.py) verifies key presence without ever logging or returning key material. Unit test `test_ai_status_security` asserts that Google API key prefixes (`AIza*`) never appear in status payloads.
 - **Git Exclusions**: The repository's [`.gitignore`](.gitignore) excludes `.env`, `*.db`, `celebrai.db`, `.venv/`, `__pycache__/`, `.pytest_cache/`, and `.streamlit/secrets.toml`.
 - **Public Git Index**: The published repository contains 18 clean files (~0.14 MB) containing zero credentials or personal event records.
-- **Single-Tenant Local Model**: CelebrAI operates as a single-user local workstation application. It currently has no user authentication, authorization model, or multi-tenant isolation. Do not host sensitive personal data or expose the instance on untrusted public networks without adding an authentication proxy.
+- **Single-Tenant Architecture & Shared Public Access Warning**: CelebrAI operates without user authentication, login mechanisms, or multi-tenant database partitioning. In the live public Streamlit Community Cloud deployment, all visitors access and share the same live SQLite database, meaning any visitor may view, create, modify, or delete stored celebration records. **Users are explicitly warned not to enter personal, confidential, or sensitive information.**
 
 ---
 
 ## 🚧 Confirmed Limitations & Future Roadmap
 
 ### Confirmed Limitations
-1. **Single-Tenant Architecture**: No user login or access control lists; all users accessing the instance view the same database.
+1. **Single-Tenant Public Deployment & Shared Database**: The application contains no user accounts, authentication, or per-user database partitioning. In the public cloud deployment, all visitors share the active database and may view, create, modify, or delete records. Users should not input personal, confidential, or sensitive information.
 2. **Ephemeral Cloud Persistence**: Uses local SQLite, which resets on container redeployments in stateless cloud environments.
-3. **No Live Foreign Exchange**: Multi-currency displays segregate amounts rather than converting them via real-time market rates.
-4. **Manual Vendor Dispatch**: Vendor items track status internally but do not send outbound automated emails or SMS messages.
+3. **Intermittent Upstream Gemini Availability**: Upstream Google infrastructure occasionally experiences high demand (`HTTP 503 UNAVAILABLE`) or timeouts (`HTTP 504 DEADLINE_EXCEEDED`). CelebrAI mitigates this by bounding generation to a single attempt and falling back to its deterministic engine once the configured timeout (45 seconds in Streamlit Community Cloud; 30 seconds locally) or server error is reached.
+4. **Decoupled Local vs. Cloud Timeouts**: Local execution defaults to 30,000 ms, whereas Streamlit Community Cloud is configured with 45,000 ms in secrets; settings are separate and decoupled.
+5. **No Live Foreign Exchange**: Multi-currency displays segregate amounts into distinct currency tabs rather than converting them via real-time market rates.
+6. **Manual Vendor Dispatch**: Vendor items track status internally but do not send outbound automated emails or SMS messages.
 
 ### Future Roadmap (*Proposed Enhancements*)
 - [ ] Integration with hosted PostgreSQL (Supabase / Neon) for durable cloud persistence.
@@ -582,13 +613,13 @@ Contributions, bug reports, and suggestions are welcome!
 
 | Deliverable | Status | Details / URL |
 |---|---|---|
-| **Public GitHub Repository** | ✅ **Completed** | [https://github.com/Yemmmyc/celebrai](https://github.com/Yemmmyc/celebrai) |
+| **Public GitHub Repository** | ✅ **Completed** | [https://github.com/Yemmmyc/celebrai](https://github.com/Yemmmyc/celebrai) (Commit: `8eb0f3ff96495467130ccf03f1c4303b8621eff3`) |
+| **Live Deployment URL** | ✅ **Completed** | [https://celebrai.streamlit.app/](https://celebrai.streamlit.app/) |
 | **Payload Size < 10 MB** | ✅ **Completed** | 18 files, ~0.144 MB (1.44% of quota) |
-| **Automated Test Suite** | ✅ **Completed** | 37 tests passing (`pytest -q`) |
+| **Automated Test Suite** | ✅ **Completed** | 47 tests passing (`pytest -q`) |
 | **Zero Dependency Conflicts** | ✅ **Completed** | `pip check` confirmed clean |
 | **GenAI Documentation** | ✅ **Completed** | Detailed in Section 11 of this README |
-| **Live Deployment URL** | ⏳ *Pending* | To be configured via Streamlit Community Cloud |
-| **Demo Walkthrough Video** | ⏳ *Pending* | Recording in progress |
+| **Demo Walkthrough Video** | ⏳ *Pending* | Final walkthrough recording in progress |
 | **LinkedIn Submission Post** | ⏳ *Pending* | To be published with final demo |
 
 ---
