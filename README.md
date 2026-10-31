@@ -17,7 +17,7 @@
 1. [Project Overview & Problem Statement](#project-overview--problem-statement)
 2. [Challenge Context (PromptWars Challenge 5)](#challenge-context-promptwars-challenge-5)
 3. [Implemented Features](#implemented-features)
-4. [User Interface & Screenshots](#user-interface--screenshots)
+4. [Application Screenshots](#application-screenshots)
 5. [Technology Stack & Architecture](#technology-stack--architecture)
 6. [How It Works (End-to-End Workflow)](#how-it-works-end-to-end-workflow)
 7. [Repository Structure](#repository-structure)
@@ -129,42 +129,54 @@ Every feature listed below is verified and implemented in the active codebase:
 
 ---
 
-## 🖼️ User Interface & Screenshots
+## Application Screenshots
 
-CelebrAI features a custom dark luxury theme configured via `.streamlit/config.toml` and centralized CSS:
-- **Page Background**: Deep Plum-Black (`#100D14`)
-- **Card Containers**: Charcoal-Plum (`#211A29`) with subtle slate borders (`#2E2538`)
-- **Primary Typography**: Warm Ivory (`#F5F0EA`) featuring *Playfair Display* and *Plus Jakarta Sans*
-- **Accent Metallics**: Champagne Gold (`#C5A059`) and Muted Teal (`#2E6F68` / `#6CB8A8`)
+CelebrAI features a custom dark luxury theme configured via `.streamlit/config.toml` and centralized CSS, pairing Deep Plum-Black (`#100D14`), Charcoal-Plum (`#211A29`), Champagne Gold (`#C5A059`), and Muted Teal (`#2E6F68` / `#6CB8A8`) typography and components.
 
-```
-+-----------------------------------------------------------------------------------+
-|  [Screenshot Placeholder: Executive Dashboard & Multi-Currency Analytics]         |
-|  File target: docs/screenshots/dashboard.png                                      |
-|  Displays 4 KPI cards, spotlight event, recent table, and currency tabs           |
-+-----------------------------------------------------------------------------------+
-```
+### 1. Executive Dashboard
+*Portfolio KPI summary cards, upcoming celebration spotlight card, currency-segregated budget analytics tabs, and recent celebration portfolio table.*
 
-```
-+-----------------------------------------------------------------------------------+
-|  [Screenshot Placeholder: Create Celebration & Gemini Plan Inspection]            |
-|  File target: docs/screenshots/create_event.png                                   |
-|  Displays input form with currency selector and structured AI design dossier       |
-+-----------------------------------------------------------------------------------+
-```
+![Executive Dashboard](screenshots/dashboard.png)
 
-```
-+-----------------------------------------------------------------------------------+
-|  [Screenshot Placeholder: Budget Variance & Day-Of Run-of-Show]                  |
-|  File target: docs/screenshots/budget_and_timeline.png                            |
-|  Displays penny-precision variance bars, invoice logs, and timeline progress       |
-+-----------------------------------------------------------------------------------+
-```
+### 2. Create a New Celebration
+*Bespoke celebration creator supporting 8 event categories, 4 international currencies (`USD`, `NGN`, `GBP`, `EUR`), guest count, budget specifications, and pre-generation validation.*
 
-> [!TIP]
-> **Maintainer Note**: Add application screenshots to `docs/screenshots/` and update the markdown links above prior to marketing releases.
->
-> **Demo Video**: *Not yet published.* (A walkthrough video will be linked here once finalized).
+![Create a New Celebration](screenshots/create-celebration.png)
+
+### 3. AI Event Plan — Deterministic Fallback
+*Note: This captured example shows CelebrAI's deterministic rule-based planning engine activating after an external Google Gemini HTTP 504 timeout (Deadline Exceeded). All seven structured schema fields (`theme_concept`, `theme_description`, `color_palette`, `decor_highlights`, `menu_suggestions`, `entertainment_ideas`, `planner_pro_tips`) are synthesized deterministically and preserved to SQLite without data loss. (This demonstrates resilient fallback behavior, not a successful Gemini-generated response).*
+
+![AI Event Plan — Deterministic Fallback](screenshots/ai-event-plan-fallback.png)
+
+### 4. Budget Planner and Financial Allocation
+*Penny-precision budget breakdown across the six categories actually visible, with discrepancy reconciliation into Catering, real-time variance tracking, and line-item actual invoice logging.*
+
+![Budget Planner and Financial Allocation](screenshots/budget-planner.png)
+
+### 5. Master Event Planning Timeline
+*Milestone preparation roadmap tracking preparation from 6+ months out down to celebration eve, with interactive completion toggles persisted to SQLite.*
+
+![Master Event Planning Timeline](screenshots/event-timeline.png)
+
+### 6. Day-of Event Run-of-Show
+*Scheduled event-day sequence covering vendor load-in, host arrival, reception highlights, and load-out with interactive progress tracking.*
+
+![Day-of Event Run-of-Show](screenshots/day-of-run-of-show.png)
+
+### 7. Expanded Celebration Details and Saved Plan
+*Deep-inspection event accordion displaying the full creative narrative, 4-swatch color palette, tactile decor concepts, culinary suggestions, entertainment, and expert coordinator tips.*
+
+![Expanded Celebration Details and Saved Plan](screenshots/expanded-event-details.png)
+
+### 8. My Celebrations Portfolio
+*Celebration portfolio management view featuring event status badges (`Planning`, `Confirmed`, `Completed`), category filters, and cascading deletion controls.*
+
+![My Celebrations Portfolio](screenshots/my-events.png)
+
+### 9. Vendor Checklist and Procurement Tracking
+*Vendor management workflow tracking six vendor service roles across procurement stages (`Needed`, `Researching`, `Contacted`, `Booked`, `Paid`) with inline note persistence.*
+
+![Vendor Checklist and Procurement Tracking](screenshots/vendor-checklist.png)
 
 ---
 
@@ -509,7 +521,7 @@ CelebrAI is deployed and operational on **Streamlit Community Cloud**:
 
 > [!NOTE]
 > **Deployment Status**: **Live & Operational** at [https://celebrai.streamlit.app/](https://celebrai.streamlit.app/)<br>
-> Deployed from public GitHub repository [`Yemmmyc/celebrai`](https://github.com/Yemmmyc/celebrai) on the `main` branch (Latest published commit: [`8eb0f3ff96495467130ccf03f1c4303b8621eff3`](https://github.com/Yemmmyc/celebrai/commit/8eb0f3ff96495467130ccf03f1c4303b8621eff3)).
+> Deployed from public GitHub repository [`Yemmmyc/celebrai`](https://github.com/Yemmmyc/celebrai) on the [`main` branch](https://github.com/Yemmmyc/celebrai/tree/main).
 
 ### Step-by-Step Deployment Configuration
 1. **Fork or Push to GitHub**:
@@ -613,9 +625,9 @@ Contributions, bug reports, and suggestions are welcome!
 
 | Deliverable | Status | Details / URL |
 |---|---|---|
-| **Public GitHub Repository** | ✅ **Completed** | [https://github.com/Yemmmyc/celebrai](https://github.com/Yemmmyc/celebrai) (Commit: `8eb0f3ff96495467130ccf03f1c4303b8621eff3`) |
+| **Public GitHub Repository** | ✅ **Completed** | [https://github.com/Yemmmyc/celebrai](https://github.com/Yemmmyc/celebrai) ([`main` branch](https://github.com/Yemmmyc/celebrai/tree/main)) |
 | **Live Deployment URL** | ✅ **Completed** | [https://celebrai.streamlit.app/](https://celebrai.streamlit.app/) |
-| **Payload Size < 10 MB** | ✅ **Completed** | 18 files, ~0.144 MB (1.44% of quota) |
+| **Payload Size < 10 MB** | ✅ **Completed** | 27 files, ~1.84 MB (18.4% of quota) |
 | **Automated Test Suite** | ✅ **Completed** | 47 tests passing (`pytest -q`) |
 | **Zero Dependency Conflicts** | ✅ **Completed** | `pip check` confirmed clean |
 | **GenAI Documentation** | ✅ **Completed** | Detailed in Section 11 of this README |
