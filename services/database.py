@@ -9,11 +9,43 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Generator
 
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "celebrai.db")
+
+# Thread-safe database initialization tracking
+_INITIALIZED_DBS: set[str] = set()
+_INIT_LOCK = threading.RLock()
+
+
+def reset_db_initialization_cache() -> None:
+    """Clear the initialized database cache (primarily for unit test isolation)."""
+    with _INIT_LOCK:
+        _INITIALIZED_DBS.clear()
+
+
+def ensure_db_initialized(db_path: str | None = None) -> None:
+    """Ensure database tables, schema migrations, and indexes are initialized once per database file."""
+    path = os.path.abspath(db_path or os.getenv("CELEBRAI_DB_PATH", DEFAULT_DB_PATH))
+    if path in _INITIALIZED_DBS:
+        return
+    with _INIT_LOCK:
+        if path in _INITIALIZED_DBS:
+            return
+        init_db(path)
+
+
+def invalidate_database_cache() -> None:
+    """Invalidate any active Streamlit cached query data when mutations occur."""
+    try:
+        import streamlit as st
+
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 
 @contextmanager
@@ -34,8 +66,9 @@ def get_connection(db_path: str | None = None) -> Generator[sqlite3.Connection, 
 
 
 def init_db(db_path: str | None = None) -> None:
-    """Initialize database tables idempotently."""
-    with get_connection(db_path) as conn:
+    """Initialize database tables, schema migrations, and performance indexes idempotently."""
+    path = os.path.abspath(db_path or os.getenv("CELEBRAI_DB_PATH", DEFAULT_DB_PATH))
+    with get_connection(path) as conn:
         cursor = conn.cursor()
 
         # Events table
@@ -65,7 +98,6 @@ def init_db(db_path: str | None = None) -> None:
         existing_cols = [row["name"] for row in cursor.fetchall()]
         if "currency" not in existing_cols:
             cursor.execute("ALTER TABLE events ADD COLUMN currency TEXT DEFAULT 'USD';")
-
 
         # Budget items table
         cursor.execute(
@@ -116,6 +148,16 @@ def init_db(db_path: str | None = None) -> None:
             """
         )
 
+        # Foreign Key and Query Optimization Indexes
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_budget_items_event_id ON budget_items(event_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_items_event_id ON timeline_items(event_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vendor_items_event_id ON vendor_items(event_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_date ON events(date);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);")
+
+    with _INIT_LOCK:
+        _INITIALIZED_DBS.add(path)
+
 
 def save_event(
     event_data: dict[str, Any],
@@ -125,7 +167,7 @@ def save_event(
     db_path: str | None = None,
 ) -> int:
     """Insert a new event record with its associated budget, timeline, and vendors."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     now = datetime.now().isoformat()
 
     ai_plan_json = event_data.get("ai_plan_json")
@@ -220,12 +262,13 @@ def save_event(
                     ),
                 )
 
+        invalidate_database_cache()
         return event_id
 
 
 def get_event(event_id: int, db_path: str | None = None) -> dict[str, Any] | None:
     """Retrieve an event by ID, including parsed AI plan if present and normalized currency."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM events WHERE id = ?", (event_id,))
@@ -248,13 +291,22 @@ def list_events(
     db_path: str | None = None,
     status_filter: str | None = None,
     type_filter: str | None = None,
+    include_plan: bool = True,
 ) -> list[dict[str, Any]]:
     """List all events with optional filters, sorted chronologically.
 
-    Always parses ai_plan_json into a structured ai_plan dict and normalizes currency.
+    Parses ai_plan_json into a structured ai_plan dict when include_plan is True.
+    When include_plan is False, skips expensive JSON deserialization for fast listing.
     """
-    init_db(db_path)
-    query = "SELECT * FROM events WHERE 1=1"
+    ensure_db_initialized(db_path)
+    if include_plan:
+        query = "SELECT * FROM events WHERE 1=1"
+    else:
+        query = (
+            "SELECT id, name, event_type, date, location, guest_count, budget, "
+            "currency, theme, preferences, status, created_at, updated_at "
+            "FROM events WHERE 1=1"
+        )
     params: list[Any] = []
 
     if status_filter and status_filter != "All":
@@ -275,21 +327,38 @@ def list_events(
         for r in rows:
             ev = dict(r)
             ev["currency"] = str(ev.get("currency") or "USD").strip().upper() or "USD"
-            if ev.get("ai_plan_json"):
-                try:
-                    ev["ai_plan"] = json.loads(ev["ai_plan_json"])
-                except Exception:
+            if include_plan:
+                if ev.get("ai_plan_json"):
+                    try:
+                        ev["ai_plan"] = json.loads(ev["ai_plan_json"])
+                    except Exception:
+                        ev["ai_plan"] = None
+                else:
                     ev["ai_plan"] = None
             else:
+                ev["ai_plan_json"] = None
                 ev["ai_plan"] = None
             result.append(ev)
         return result
 
 
+def list_event_summaries(
+    db_path: str | None = None,
+    status_filter: str | None = None,
+    type_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Lightweight event listing selecting metadata without parsing full AI plan JSON."""
+    return list_events(
+        db_path=db_path,
+        status_filter=status_filter,
+        type_filter=type_filter,
+        include_plan=False,
+    )
+
 
 def update_event_status(event_id: int, status: str, db_path: str | None = None) -> bool:
     """Update event status ('Planning', 'Confirmed', 'Completed')."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     now = datetime.now().isoformat()
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
@@ -297,21 +366,27 @@ def update_event_status(event_id: int, status: str, db_path: str | None = None) 
             "UPDATE events SET status = ?, updated_at = ? WHERE id = ?",
             (status, now, event_id),
         )
-        return cursor.rowcount > 0
+        success = cursor.rowcount > 0
+        if success:
+            invalidate_database_cache()
+        return success
 
 
 def delete_event(event_id: int, db_path: str | None = None) -> bool:
     """Delete an event and its cascading child records."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM events WHERE id = ?", (event_id,))
-        return cursor.rowcount > 0
+        success = cursor.rowcount > 0
+        if success:
+            invalidate_database_cache()
+        return success
 
 
 def get_budget_items(event_id: int, db_path: str | None = None) -> list[dict[str, Any]]:
     """Retrieve all budget items for an event."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -328,7 +403,7 @@ def update_budget_actual(
     db_path: str | None = None,
 ) -> bool:
     """Update the actual spent amount and notes on a budget line item."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         if notes is not None:
@@ -341,12 +416,15 @@ def update_budget_actual(
                 "UPDATE budget_items SET actual_amount = ? WHERE id = ?",
                 (actual_amount, item_id),
             )
-        return cursor.rowcount > 0
+        success = cursor.rowcount > 0
+        if success:
+            invalidate_database_cache()
+        return success
 
 
 def get_timeline_items(event_id: int, db_path: str | None = None) -> list[dict[str, Any]]:
     """Retrieve all timeline items for an event."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -358,7 +436,7 @@ def get_timeline_items(event_id: int, db_path: str | None = None) -> list[dict[s
 
 def toggle_timeline_completed(item_id: int, is_completed: bool, db_path: str | None = None) -> bool:
     """Toggle the completion status of a timeline item."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     val = 1 if is_completed else 0
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
@@ -366,12 +444,15 @@ def toggle_timeline_completed(item_id: int, is_completed: bool, db_path: str | N
             "UPDATE timeline_items SET is_completed = ? WHERE id = ?",
             (val, item_id),
         )
-        return cursor.rowcount > 0
+        success = cursor.rowcount > 0
+        if success:
+            invalidate_database_cache()
+        return success
 
 
 def get_vendor_items(event_id: int, db_path: str | None = None) -> list[dict[str, Any]]:
     """Retrieve all vendor checklist items for an event."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -390,7 +471,7 @@ def update_vendor_item(
     db_path: str | None = None,
 ) -> bool:
     """Update vendor details."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -401,12 +482,15 @@ def update_vendor_item(
             """,
             (name, status, actual_cost, notes, item_id),
         )
-        return cursor.rowcount > 0
+        success = cursor.rowcount > 0
+        if success:
+            invalidate_database_cache()
+        return success
 
 
 def get_dashboard_metrics(db_path: str | None = None) -> dict[str, Any]:
     """Calculate summary dashboard metrics."""
-    init_db(db_path)
+    ensure_db_initialized(db_path)
     today = datetime.now().strftime("%Y-%m-%d")
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
@@ -476,7 +560,6 @@ def get_dashboard_metrics(db_path: str | None = None) -> dict[str, Any]:
         # Breakdown by status
         cursor.execute("SELECT status, COUNT(*) as count FROM events GROUP BY status")
         basic["status_counts"] = {r["status"]: r["count"] for r in cursor.fetchall()}
-
 
         # Breakdown by type
         cursor.execute("SELECT event_type, COUNT(*) as count FROM events GROUP BY event_type")

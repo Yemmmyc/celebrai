@@ -8,7 +8,6 @@ and Warm Ivory (#F4EEE7).
 
 from __future__ import annotations
 
-import json
 from datetime import date, datetime
 from typing import Any
 
@@ -16,7 +15,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from services.ai_service import generate_event_plan, get_ai_status, is_gemini_configured
+from services.ai_service import generate_event_plan, get_ai_status
 from services.database import (
     delete_event,
     get_budget_items,
@@ -26,6 +25,7 @@ from services.database import (
     get_vendor_items,
     init_db,
     list_events,
+    list_event_summaries,
     save_event,
     toggle_timeline_completed,
     update_budget_actual,
@@ -41,6 +41,12 @@ from services.planner import (
     generate_vendor_checklist,
     get_currency_symbol,
     validate_event_input,
+)
+from services.security import (
+    escape_text,
+    get_and_clear_notifications,
+    sanitize_css_color,
+    set_notification,
 )
 
 
@@ -115,7 +121,7 @@ st.markdown(
     .page-header {
         margin-bottom: 1.4rem;
         padding-bottom: 0.75rem;
-        border-bottom: 1px solid #2E2538;
+        border-bottom: 1px solid #786694;
     }
     .page-header-title {
         font-family: 'Playfair Display', Georgia, serif;
@@ -138,7 +144,7 @@ st.markdown(
         background: #211A29;
         border-radius: 12px;
         padding: 1.25rem 1.4rem;
-        border: 1px solid #2E2538;
+        border: 1px solid #786694;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
         min-height: 124px;
         display: flex;
@@ -178,7 +184,7 @@ st.markdown(
         background: #211A29;
         border-radius: 12px;
         padding: 1.5rem 1.6rem;
-        border: 1px solid #2E2538;
+        border: 1px solid #786694;
         margin-bottom: 1.25rem;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
         color: #F5F0EA;
@@ -187,7 +193,7 @@ st.markdown(
         background: #211A29;
         border-radius: 12px;
         padding: 1.4rem 1.6rem;
-        border: 1px solid #2E2538;
+        border: 1px solid #786694;
         border-left: 4px solid #C5A059;
         margin-bottom: 1.4rem;
         box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
@@ -270,10 +276,13 @@ st.markdown(
         box-shadow: 0 4px 14px rgba(197, 160, 89, 0.2);
         transform: translateY(-1px);
     }
-    div.stButton > button:first-child:active,
-    div.stButton > button:first-child:focus {
-        outline: none;
+    div.stButton > button:first-child:active {
         box-shadow: 0 0 0 2px #C5A059;
+    }
+    div.stButton > button:first-child:focus-visible {
+        outline: 2px solid #E0BA6A !important;
+        outline-offset: 2px !important;
+        box-shadow: 0 0 0 3px rgba(197, 160, 89, 0.35) !important;
     }
 
     /* Form Submit Button */
@@ -295,11 +304,22 @@ st.markdown(
         box-shadow: 0 4px 16px rgba(197, 160, 89, 0.25);
         transform: translateY(-1px);
     }
+    div.stFormSubmitButton > button:first-child:focus-visible {
+        outline: 2px solid #E0BA6A !important;
+        outline-offset: 2px !important;
+        box-shadow: 0 0 0 3px rgba(197, 160, 89, 0.35) !important;
+    }
+
+    /* Universal Focus-Visible Rule (WCAG 2.2 AA) */
+    :focus-visible {
+        outline: 2px solid #E0BA6A !important;
+        outline-offset: 2px !important;
+    }
 
     /* Sidebar Styling */
     [data-testid="stSidebar"] {
         background-color: #191320 !important;
-        border-right: 1px solid #2E2538 !important;
+        border-right: 1px solid #786694 !important;
     }
     [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
         color: #F5F0EA;
@@ -319,6 +339,13 @@ st.markdown(
         background: #211A29 !important;
         color: #F5F0EA !important;
     }
+    [data-testid="stSidebar"] .stRadio label:focus-within,
+    [data-testid="stSidebar"] .stRadio label:has(input:focus-visible) {
+        outline: 2px solid #E0BA6A !important;
+        outline-offset: 1px !important;
+        background: #211A29 !important;
+        color: #F5F0EA !important;
+    }
     [data-testid="stSidebar"] .stRadio div[aria-checked="true"] > div,
     [data-testid="stSidebar"] .stRadio label[data-checked="true"] {
         background: #211A29 !important;
@@ -335,21 +362,32 @@ st.markdown(
     }
     [data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="textarea"] {
         background-color: #191320 !important;
-        border: 1px solid #2E2538 !important;
+        border: 1px solid #786694 !important;
         border-radius: 8px !important;
         color: #F5F0EA !important;
         font-size: 0.92rem !important;
     }
     [data-baseweb="input"]:focus-within, [data-baseweb="textarea"]:focus-within {
-        border-color: #C5A059 !important;
-        box-shadow: 0 0 0 1px #C5A059 !important;
+        border-color: #E0BA6A !important;
+        box-shadow: 0 0 0 2px #E0BA6A !important;
     }
     [data-baseweb="select"] > div {
         background-color: #191320 !important;
-        border: 1px solid #2E2538 !important;
+        border: 1px solid #786694 !important;
         color: #F5F0EA !important;
         border-radius: 8px !important;
         font-size: 0.92rem !important;
+    }
+    [data-baseweb="select"]:focus-within > div {
+        border-color: #E0BA6A !important;
+        box-shadow: 0 0 0 2px #E0BA6A !important;
+    }
+
+    /* Checkbox Focus Styling */
+    input[type="checkbox"]:focus-visible,
+    [data-baseweb="checkbox"]:focus-within {
+        outline: 2px solid #E0BA6A !important;
+        outline-offset: 2px !important;
     }
 
     /* Timeline Cards */
@@ -357,7 +395,7 @@ st.markdown(
         background: #211A29;
         border-radius: 10px;
         padding: 0.9rem 1.15rem;
-        border: 1px solid #2E2538;
+        border: 1px solid #786694;
         border-left: 3px solid #C5A059;
         margin-bottom: 0.65rem;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
@@ -366,8 +404,8 @@ st.markdown(
         background: #191320;
         border-radius: 10px;
         padding: 0.9rem 1.15rem;
-        border: 1px solid #251D2D;
-        border-left: 3px solid #2E6F68;
+        border: 1px solid #786694;
+        border-left: 3px solid #6CB8A8;
         margin-bottom: 0.65rem;
         opacity: 0.85;
     }
@@ -385,13 +423,13 @@ st.markdown(
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
-    .timeline-title {
+    .timeline-title, h3.timeline-title, h4.timeline-title {
         margin: 0.2rem 0 0.2rem 0;
         font-family: 'Playfair Display', serif;
         color: #F5F0EA;
         font-size: 1.1rem;
     }
-    .timeline-title-completed {
+    .timeline-title-completed, h3.timeline-title-completed, h4.timeline-title-completed {
         margin: 0.2rem 0 0.2rem 0;
         font-family: 'Playfair Display', serif;
         color: #8C8294;
@@ -408,7 +446,7 @@ st.markdown(
     /* Expanders */
     [data-testid="stExpander"] {
         background: #211A29 !important;
-        border: 1px solid #2E2538 !important;
+        border: 1px solid #786694 !important;
         border-radius: 10px !important;
     }
     [data-testid="stExpander"] summary {
@@ -420,7 +458,7 @@ st.markdown(
     /* Tabs */
     [data-baseweb="tab-list"] {
         background-color: transparent !important;
-        border-bottom: 1px solid #2E2538 !important;
+        border-bottom: 1px solid #786694 !important;
         gap: 0.8rem;
     }
     [data-baseweb="tab"] {
@@ -439,7 +477,7 @@ st.markdown(
     [data-testid="stDataFrame"] {
         border-radius: 8px;
         overflow: hidden;
-        border: 1px solid #2E2538;
+        border: 1px solid #786694;
     }
     [data-testid="stDataFrame"] div {
         font-size: 0.9rem !important;
@@ -454,6 +492,34 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+def render_notifications() -> None:
+    """Render and drain all queued flash notifications."""
+    notifications = get_and_clear_notifications()
+    for notif in notifications:
+        lvl = notif.get("level", "success")
+        msg = notif.get("message", "")
+        if lvl == "success":
+            st.success(msg)
+        elif lvl == "warning":
+            st.warning(msg)
+        elif lvl == "info":
+            st.info(msg)
+        elif lvl == "error":
+            st.error(msg)
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_cached_dashboard_metrics() -> dict[str, Any]:
+    """Retrieve and cache aggregated dashboard metrics for high-efficiency repeat rendering."""
+    return get_dashboard_metrics()
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def get_cached_event_summaries() -> list[dict[str, Any]]:
+    """Retrieve and cache lightweight event summaries without full AI plan deserialisation."""
+    return list_event_summaries()
 
 
 def render_sidebar() -> str:
@@ -504,23 +570,24 @@ def render_sidebar() -> str:
         )
         st.session_state.nav_page = selected_page
 
-        st.markdown("<hr style='border: none; border-bottom: 1px solid #2E2538; margin: 1.2rem 0;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='border: none; border-bottom: 1px solid #786694; margin: 1.2rem 0;'>", unsafe_allow_html=True)
 
         # Engine & Persistence Status Badge
         ai_info = get_ai_status()
-        status_color = "#6CB8A8" if ai_info["configured"] else "#F0B36C"
+        status_color = sanitize_css_color("#6CB8A8" if ai_info["configured"] else "#F0B36C")
         status_icon = "🟢" if ai_info["configured"] else "🟡"
-        status_text = (
+        raw_status_text = (
             f"Gemini Active ({ai_info['model']})"
             if ai_info["configured"]
             else "Rule-Based Fallback"
         )
+        safe_status_text = escape_text(raw_status_text)
 
         st.markdown(
             f"""
-            <div style="background: #211A29; border-radius: 8px; padding: 0.75rem 0.9rem; border: 1px solid #2E2538; font-size: 0.82rem;">
+            <div style="background: #211A29; border-radius: 8px; padding: 0.75rem 0.9rem; border: 1px solid #786694; font-size: 0.82rem;">
                 <div style="color: #B9ADBF; font-weight: 600; margin-bottom: 0.25rem; letter-spacing: 0.05em; font-size: 0.74rem;">SYSTEM STATUS</div>
-                <div style="color: {status_color}; font-weight: 600;">{status_icon} {status_text}</div>
+                <div style="color: {status_color}; font-weight: 600;">{status_icon} {safe_status_text}</div>
                 <div style="color: #B9ADBF; margin-top: 0.25rem;">💾 SQLite Persistence: Ready</div>
             </div>
             """,
@@ -530,6 +597,177 @@ def render_sidebar() -> str:
         st.caption("CelebrAI Studio • Challenge 5")
 
         return selected_page
+
+
+def render_event_selector(
+    key: str,
+    help_text: str = "Choose an event from your portfolio",
+    events: list[dict[str, Any]] | None = None,
+) -> int | None:
+    """Render a standardized celebration selection dropdown for portfolio pages.
+
+    Returns the integer event ID of the selected celebration, or None if no celebrations exist.
+    """
+    if events is None:
+        events = get_cached_event_summaries()
+
+    if not events:
+        st.info("No events found. Please create an event first.")
+        return None
+
+    event_options = {f"{e['name']} ({e['date']})": e["id"] for e in events}
+    selected_label = st.selectbox(
+        "Select Celebration",
+        list(event_options.keys()),
+        help=help_text,
+        key=key,
+    )
+    return event_options[selected_label]
+
+
+def render_ai_event_plan(
+    ai_plan: dict[str, Any],
+    heading_prefix: str = "🎨 Creative Concept",
+    heading_level: int = 3,
+) -> None:
+    """Render a structured, accessible presentation of all seven AIEventPlan fields.
+
+    Renders theme concept, narrative description, color palette chips, decor ideas,
+    culinary concepts, entertainment highlights, and planner pro-tips with consistent
+    security escaping and luxury styling.
+    """
+    if not ai_plan:
+        return
+
+    # Generation mode notice
+    if ai_plan.get("_generation_mode") == "Deterministic Fallback":
+        fb_reason = ai_plan.get("_fallback_reason", "AI generation unavailable.")
+        st.warning(f"⚙️ **Deterministic Fallback Plan Active**: {escape_text(fb_reason)}")
+    else:
+        st.caption("✨ Bespoke Creative Plan powered by Gemini AI")
+
+    # Concept Header
+    safe_concept = escape_text(ai_plan.get("theme_concept", "Bespoke Concept"))
+    h_hashes = "#" * heading_level
+    st.markdown(f"{h_hashes} {heading_prefix}: {safe_concept}")
+
+    # Narrative Description Box
+    if ai_plan.get("theme_description"):
+        safe_desc = escape_text(ai_plan.get("theme_description", ""))
+        st.markdown(
+            f"""
+            <div class="content-box" style="margin-bottom: 1rem;">
+                <p style="font-size: 1.05rem; line-height: 1.6; color: #F4EEE7; margin: 0;">
+                    {safe_desc}
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Curated Color Palette
+    palette = ai_plan.get("color_palette", [])
+    if palette:
+        st.markdown("**Curated Colour Palette:**")
+        palette_html = "".join([f'<span class="palette-chip">{escape_text(c)}</span>' for c in palette])
+        st.markdown(f'<div class="palette-container" style="margin-bottom: 1rem;">{palette_html}</div>', unsafe_allow_html=True)
+
+    # Highlights Grid (2 Columns)
+    col_left, col_right = st.columns(2)
+    sub_heading = "#" * (heading_level + 1)
+    with col_left:
+        st.markdown(f"{sub_heading} 🌿 Decor & Styling Highlights")
+        for dec in ai_plan.get("decor_highlights", []):
+            st.markdown(f"- {escape_text(dec)}")
+
+        st.markdown(f"{sub_heading} 🍸 Culinary & Beverage Highlights")
+        for cul in ai_plan.get("menu_suggestions", []):
+            st.markdown(f"- {escape_text(cul)}")
+
+    with col_right:
+        st.markdown(f"{sub_heading} 🎵 Entertainment & Guest Experience")
+        for ent in ai_plan.get("entertainment_ideas", []):
+            st.markdown(f"- {escape_text(ent)}")
+
+        st.markdown(f"{sub_heading} 💡 Expert Planner Pro-Tips")
+        for tip in ai_plan.get("planner_pro_tips", []):
+            st.markdown(f"- {escape_text(tip)}")
+
+
+def render_currency_budget_chart(curr_code: str, curr_events: list[dict[str, Any]]) -> None:
+    """Render an Altair horizontal bar chart aggregating budgets by event type for a single currency."""
+    sym = get_currency_symbol(curr_code)
+    type_agg: dict[str, dict[str, Any]] = {}
+    for ev in curr_events:
+        etype = ev.get("event_type", "Other")
+        if etype not in type_agg:
+            type_agg[etype] = {"budget": 0.0, "count": 0}
+        type_agg[etype]["budget"] += float(ev.get("budget", 0.0))
+        type_agg[etype]["count"] += 1
+
+    chart_rows = [
+        {
+            "Event Type": etype,
+            "Total Budget": data["budget"],
+            "Formatted Budget": format_currency(data["budget"], curr_code, decimals=0),
+            "Celebrations": data["count"],
+        }
+        for etype, data in type_agg.items()
+    ]
+    chart_data = pd.DataFrame(chart_rows)
+
+    if chart_data.empty:
+        st.info(f"No celebrations recorded in {curr_code}.")
+        return
+
+    chart = (
+        alt.Chart(chart_data)
+        .mark_bar(cornerRadius=5)
+        .encode(
+            x=alt.X(
+                "Total Budget:Q",
+                title=f"Total Budget ({sym} {curr_code})",
+                axis=alt.Axis(
+                    labelColor="#F5F0EA",
+                    titleColor="#C5A059",
+                    gridColor="#241C2D",
+                    labelFlush=False,
+                ),
+            ),
+            y=alt.Y(
+                "Event Type:N",
+                sort="-x",
+                title=None,
+                axis=alt.Axis(
+                    labelColor="#F5F0EA",
+                    labelLimit=130,
+                ),
+            ),
+            color=alt.Color(
+                "Event Type:N",
+                scale=alt.Scale(
+                    range=[
+                        "#6CB8A8",
+                        "#C5A059",
+                        "#9B5DE5",
+                        "#E07A5F",
+                        "#81B29A",
+                        "#A67C94",
+                    ]
+                ),
+                legend=None,
+            ),
+            tooltip=[
+                alt.Tooltip("Event Type:N", title="Category"),
+                alt.Tooltip("Formatted Budget:N", title=f"Budget ({sym} {curr_code})"),
+                alt.Tooltip("Celebrations:Q", title="Celebrations"),
+            ],
+        )
+        .properties(height=230)
+        .configure_view(strokeWidth=0)
+        .configure(background="transparent")
+    )
+    st.altair_chart(chart, width="stretch")
 
 
 def page_dashboard() -> None:
@@ -548,14 +786,16 @@ def page_dashboard() -> None:
         )
     with c_head_right:
         st.write("")
-        if st.button("✨ New Celebration", key="dash_new_btn", width="stretch"):
+        if st.button("✨ New Celebration", key="dash_new_btn", width="stretch", help="Navigate to Create Event form to plan a new celebration"):
             st.session_state.nav_page = "Create Event"
             st.rerun()
 
-    st.markdown("<hr style='border: none; border-bottom: 1px solid #2E2538; margin: 0.6rem 0 1.5rem 0;'>", unsafe_allow_html=True)
+    st.markdown("<hr style='border: none; border-bottom: 1px solid #786694; margin: 0.6rem 0 1.5rem 0;'>", unsafe_allow_html=True)
 
-    metrics = get_dashboard_metrics()
-    events = list_events()
+    render_notifications()
+
+    metrics = get_cached_dashboard_metrics()
+    events = get_cached_event_summaries()
 
     # Metric Row (4 KPI Cards with uniform height)
     col1, col2, col3, col4 = st.columns(4)
@@ -595,14 +835,16 @@ def page_dashboard() -> None:
             disp_actual = "No committed spend yet"
 
         val_font_size = "1.2rem" if len(b_strs) > 1 else "1.45rem"
+        safe_disp_budget = escape_text(disp_budget)
+        safe_disp_actual = escape_text(disp_actual)
         st.markdown(
             f"""
             <div class="metric-card">
                 <div>
                     <div class="metric-label">Total Planned Budget</div>
-                    <div class="metric-value" style="font-size: {val_font_size};">{disp_budget}</div>
+                    <div class="metric-value" style="font-size: {val_font_size};">{safe_disp_budget}</div>
                 </div>
-                <div class="metric-sub">{disp_actual}</div>
+                <div class="metric-sub">{safe_disp_actual}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -637,14 +879,16 @@ def page_dashboard() -> None:
             disp_val = "—"
             sub_text = "No upcoming events"
 
+        safe_disp_val = escape_text(disp_val)
+        safe_sub_text = escape_text(sub_text)
         st.markdown(
             f"""
             <div class="metric-card">
                 <div>
                     <div class="metric-label">Next Celebration</div>
-                    <div class="metric-value">{disp_val}</div>
+                    <div class="metric-value">{safe_disp_val}</div>
                 </div>
-                <div class="metric-sub">{sub_text}</div>
+                <div class="metric-sub">{safe_sub_text}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -669,7 +913,7 @@ def page_dashboard() -> None:
 
         col_a, col_b, col_c = st.columns([1, 2, 1])
         with col_b:
-            if st.button("✨ Begin Planning Your First Celebration", width="stretch"):
+            if st.button("✨ Begin Planning Your First Celebration", key="dash_begin_first_btn", width="stretch", help="Navigate to Create Event form to begin planning"):
                 st.session_state.nav_page = "Create Event"
                 st.rerun()
 
@@ -679,22 +923,28 @@ def page_dashboard() -> None:
             nev = metrics["next_event"]
             nev_curr = nev.get("currency", "USD")
             formatted_spotlight_budget = format_currency(nev["budget"], nev_curr)
+            safe_nev_name = escape_text(nev.get("name", ""))
+            safe_nev_location = escape_text(nev.get("location", ""))
+            safe_nev_date = escape_text(nev.get("date", ""))
+            safe_nev_guests = escape_text(str(nev.get("guest_count", 0)))
+            safe_nev_budget = escape_text(formatted_spotlight_budget)
+            safe_nev_theme = escape_text(nev.get("theme") or "Bespoke Concept")
             st.markdown(
                 f"""
                 <div class="spotlight-box">
                     <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 0.5rem;">
                         <div>
                             <span class="status-badge status-confirmed">Upcoming Milestone</span>
-                            <div class="spotlight-title">{nev['name']}</div>
+                            <div class="spotlight-title">{safe_nev_name}</div>
                             <div class="spotlight-meta">
-                                <span>📍 {nev['location']}</span>
-                                <span>📅 {nev['date']}</span>
-                                <span>👥 {nev['guest_count']} Guests</span>
-                                <span>💰 {formatted_spotlight_budget}</span>
+                                <span>📍 {safe_nev_location}</span>
+                                <span>📅 {safe_nev_date}</span>
+                                <span>👥 {safe_nev_guests} Guests</span>
+                                <span>💰 {safe_nev_budget}</span>
                             </div>
                         </div>
                         <div style="text-align: right; margin-top: 0.3rem;">
-                            <span style="font-size: 0.88rem; color: #6CB8A8; font-weight: 600;">Theme: {nev.get('theme') or 'Bespoke Concept'}</span>
+                            <span style="font-size: 0.88rem; color: #6CB8A8; font-weight: 600;">Theme: {safe_nev_theme}</span>
                         </div>
                     </div>
                 </div>
@@ -706,7 +956,7 @@ def page_dashboard() -> None:
         col_left, col_right = st.columns([11, 9], gap="large")
 
         with col_left:
-            st.markdown("### Recent Celebrations")
+            st.markdown("## Recent Celebrations")
             event_records = []
             for ev in events[:6]:
                 ev_curr = ev.get("currency", "USD")
@@ -734,93 +984,19 @@ def page_dashboard() -> None:
 
             currencies_present = sorted(list(events_by_curr.keys()))
 
-            def _render_currency_budget_chart(curr_code: str, curr_events: list[dict[str, Any]]) -> None:
-                sym = get_currency_symbol(curr_code)
-                type_agg: dict[str, dict[str, Any]] = {}
-                for ev in curr_events:
-                    etype = ev.get("event_type", "Other")
-                    if etype not in type_agg:
-                        type_agg[etype] = {"budget": 0.0, "count": 0}
-                    type_agg[etype]["budget"] += float(ev.get("budget", 0.0))
-                    type_agg[etype]["count"] += 1
-
-                chart_rows = [
-                    {
-                        "Event Type": etype,
-                        "Total Budget": data["budget"],
-                        "Formatted Budget": format_currency(data["budget"], curr_code, decimals=0),
-                        "Celebrations": data["count"],
-                    }
-                    for etype, data in type_agg.items()
-                ]
-                chart_data = pd.DataFrame(chart_rows)
-
-                if chart_data.empty:
-                    st.info(f"No celebrations recorded in {curr_code}.")
-                    return
-
-                chart = (
-                    alt.Chart(chart_data)
-                    .mark_bar(cornerRadius=5)
-                    .encode(
-                        x=alt.X(
-                            "Total Budget:Q",
-                            title=f"Total Budget ({sym} {curr_code})",
-                            axis=alt.Axis(
-                                labelColor="#F5F0EA",
-                                titleColor="#C5A059",
-                                gridColor="#241C2D",
-                                labelFlush=False,
-                            ),
-                        ),
-                        y=alt.Y(
-                            "Event Type:N",
-                            sort="-x",
-                            title=None,
-                            axis=alt.Axis(
-                                labelColor="#F5F0EA",
-                                labelLimit=130,
-                            ),
-                        ),
-                        color=alt.Color(
-                            "Event Type:N",
-                            scale=alt.Scale(
-                                range=[
-                                    "#2E6F68",
-                                    "#C5A059",
-                                    "#9B5DE5",
-                                    "#E07A5F",
-                                    "#81B29A",
-                                    "#A67C94",
-                                ]
-                            ),
-                            legend=None,
-                        ),
-                        tooltip=[
-                            alt.Tooltip("Event Type:N", title="Category"),
-                            alt.Tooltip("Formatted Budget:N", title=f"Budget ({sym} {curr_code})"),
-                            alt.Tooltip("Celebrations:Q", title="Celebrations"),
-                        ],
-                    )
-                    .properties(height=230)
-                    .configure_view(strokeWidth=0)
-                    .configure(background="transparent")
-                )
-                st.altair_chart(chart, width="stretch")
-
             if len(currencies_present) == 1:
                 single_curr = currencies_present[0]
                 single_sym = get_currency_symbol(single_curr)
-                st.markdown(f"### Budget by Event Type ({single_sym} {single_curr})")
-                _render_currency_budget_chart(single_curr, events_by_curr[single_curr])
+                st.markdown(f"## Budget by Event Type ({single_sym} {single_curr})")
+                render_currency_budget_chart(single_curr, events_by_curr[single_curr])
             elif len(currencies_present) > 1:
-                st.markdown("### Budget by Event Type (by Currency)")
+                st.markdown("## Budget by Event Type (by Currency)")
                 tabs = st.tabs([f"{c} ({get_currency_symbol(c)})" for c in currencies_present])
                 for tab, c in zip(tabs, currencies_present):
                     with tab:
-                        _render_currency_budget_chart(c, events_by_curr[c])
+                        render_currency_budget_chart(c, events_by_curr[c])
             else:
-                st.markdown("### Budget by Event Type")
+                st.markdown("## Budget by Event Type")
                 st.info("No budget data available.")
 
 
@@ -832,15 +1008,18 @@ def page_create_event() -> None:
             <h1 class="page-header-title">Create New Celebration</h1>
             <p class="page-header-subtitle">Design a bespoke celebration plan pairing Gemini creative styling with deterministic financial allocations.</p>
         </div>
+        <p style="color: #B9ADBF; font-size: 0.88rem; margin: 0 0 1rem 0;"><span style="color: #E0BA6A; font-weight: 700;">*</span> indicates a required field</p>
         """,
         unsafe_allow_html=True,
     )
+
+    render_notifications()
 
     # Feedback and status message placeholder
     status_placeholder = st.empty()
 
     with st.form("create_event_form", clear_on_submit=False):
-        st.markdown("### 1. Celebration Basics")
+        st.markdown("## 1. Celebration Basics")
         col1, col2 = st.columns(2)
 
         with col1:
@@ -848,7 +1027,7 @@ def page_create_event() -> None:
                 "Celebration Name *",
                 value=st.session_state.get("ce_name", ""),
                 placeholder="e.g., Alexandra & David's Autumn Gala",
-                help="Give your event an evocative or descriptive title",
+                help="Give your event an evocative or descriptive title (e.g., Alexandra & David's Autumn Gala)",
                 key="ce_name",
             )
             type_default_idx = (
@@ -860,12 +1039,13 @@ def page_create_event() -> None:
                 "Event Category *",
                 EVENT_TYPES,
                 index=type_default_idx,
+                help="Select the category that best matches your celebration",
                 key="ce_type",
             )
             event_date = st.date_input(
                 "Celebration Date *",
                 value=st.session_state.get("ce_date", date.today()),
-                help="Date on which the celebration will take place",
+                help="Date on which the celebration will take place (YYYY-MM-DD)",
                 key="ce_date",
             )
 
@@ -874,7 +1054,7 @@ def page_create_event() -> None:
                 "Location / Venue *",
                 value=st.session_state.get("ce_location", ""),
                 placeholder="e.g., The Glasshouse Conservatory, London",
-                help="City, venue name, or destination",
+                help="City, venue name, or destination address",
                 key="ce_location",
             )
             guest_count = st.number_input(
@@ -883,6 +1063,7 @@ def page_create_event() -> None:
                 max_value=50000,
                 value=st.session_state.get("ce_guests", 75),
                 step=5,
+                help="Expected number of attendees (between 1 and 50,000)",
                 key="ce_guests",
             )
             c_curr, c_bgt = st.columns([1, 2])
@@ -896,6 +1077,7 @@ def page_create_event() -> None:
                     "Currency *",
                     SUPPORTED_CURRENCIES,
                     index=curr_default_idx,
+                    help="Select transaction currency: USD ($), NGN (₦), GBP (£), or EUR (€)",
                     key="ce_currency",
                 )
             with c_bgt:
@@ -911,7 +1093,7 @@ def page_create_event() -> None:
                     key="ce_budget",
                 )
 
-        st.markdown("### 2. Creative Vision & Preferences")
+        st.markdown("## 2. Creative Vision & Preferences")
         col3, col4 = st.columns(2)
 
         with col3:
@@ -919,6 +1101,7 @@ def page_create_event() -> None:
                 "Desired Aesthetic / Theme",
                 value=st.session_state.get("ce_theme", ""),
                 placeholder="e.g., Parisian Midnight, Tuscan Sunset, Moody Romantic, Celestial Minimalist",
+                help="Describe the desired aesthetic, mood, or design theme",
                 key="ce_theme",
             )
 
@@ -928,6 +1111,7 @@ def page_create_event() -> None:
                 value=st.session_state.get("ce_preferences", ""),
                 placeholder="e.g., Champagne tower, vegan culinary options, live jazz quartet, no plastic",
                 height=68,
+                help="Special requests, dietary preferences, entertainment ideas, or logistical notes",
                 key="ce_preferences",
             )
 
@@ -940,7 +1124,9 @@ def page_create_event() -> None:
 
         st.markdown("<br>", unsafe_allow_html=True)
         submitted = st.form_submit_button(
-            "✨ Generate & Save Celebration Plan", width="stretch"
+            "✨ Generate & Save Celebration Plan",
+            width="stretch",
+            help="Validate inputs, generate bespoke styling with Gemini, and save to SQLite",
         )
 
     if submitted:
@@ -1038,49 +1224,7 @@ def page_create_event() -> None:
 
         # Immediate preview of the newly generated plan
         st.markdown("---")
-        if ai_plan.get("_generation_mode") == "Deterministic Fallback":
-            fb_reason = ai_plan.get("_fallback_reason", "AI generation unavailable.")
-            st.warning(f"⚙️ **Deterministic Rule-Based Plan Active**: {fb_reason}")
-        else:
-            st.caption("✨ Plan generated with Gemini AI")
-
-        st.markdown(f"## ✨ Preview: {ai_plan.get('theme_concept', 'Creative Concept')}")
-
-        st.markdown(
-            f"""
-            <div class="content-box">
-                <p style="font-size: 1.1rem; line-height: 1.6; color: #F4EEE7;">
-                    {ai_plan.get('theme_description', '')}
-                </p>
-                <div style="margin-top: 1rem;">
-                    <strong style="color: #C5A059;">Curated Color Palette:</strong>
-                    <div class="palette-container">
-                        {''.join([f'<span class="palette-chip">{c}</span>' for c in ai_plan.get('color_palette', [])])}
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        c_a, c_b = st.columns(2)
-        with c_a:
-            st.markdown("#### 🌿 Decor & Styling Highlights")
-            for d in ai_plan.get("decor_highlights", []):
-                st.markdown(f"- {d}")
-
-            st.markdown("#### 🍸 Culinary & Beverage Highlights")
-            for m in ai_plan.get("menu_suggestions", []):
-                st.markdown(f"- {m}")
-
-        with c_b:
-            st.markdown("#### 🎵 Entertainment & Guest Experience")
-            for ent in ai_plan.get("entertainment_ideas", []):
-                st.markdown(f"- {ent}")
-
-            st.markdown("#### 💡 Expert Planner Pro-Tips")
-            for tip in ai_plan.get("planner_pro_tips", []):
-                st.markdown(f"- {tip}")
+        render_ai_event_plan(ai_plan, heading_prefix="✨ Preview", heading_level=2)
 
         st.info("💡 You can now view or adjust this celebration in **My Events**, **Budget Planner**, **Timeline**, or **Vendor Checklist** via the sidebar.")
 
@@ -1097,9 +1241,11 @@ def page_my_events() -> None:
         unsafe_allow_html=True,
     )
 
-    events = list_events()
+    render_notifications()
 
-    if not events:
+    portfolio_summaries = get_cached_event_summaries()
+
+    if not portfolio_summaries:
         st.info("No celebrations found. Create your first event using the **Create Event** page.")
         return
 
@@ -1107,87 +1253,54 @@ def page_my_events() -> None:
     col_f1, col_f2 = st.columns(2)
     with col_f1:
         type_options = ["All"] + EVENT_TYPES
-        filter_type = st.selectbox("Filter by Category", type_options, index=0)
+        filter_type = st.selectbox("Filter by Category", type_options, index=0, help="Filter portfolio events by celebration category")
     with col_f2:
         filter_status = st.selectbox(
-            "Filter by Status", ["All", "Planning", "Confirmed", "Completed"], index=0
+            "Filter by Status", ["All", "Planning", "Confirmed", "Completed"], index=0, help="Filter portfolio events by planning stage"
         )
 
     filtered_events = list_events(
         status_filter=filter_status,
         type_filter=filter_type,
+        include_plan=True,
     )
 
-    st.markdown(f"**Showing {len(filtered_events)} celebration(s)**")
+    st.markdown(f"## Celebration Dossiers ({len(filtered_events)})")
 
     for ev in filtered_events:
         curr = ev.get("currency", "USD")
+        safe_ev_name = escape_text(ev.get("name", ""))
+        safe_ev_type = escape_text(ev.get("event_type", ""))
+        safe_ev_date = escape_text(ev.get("date", ""))
+        safe_ev_status = escape_text(ev.get("status", ""))
         with st.expander(
             f"✨ {ev['name']} — {ev['event_type']} ({ev['date']}) | Status: {ev['status']}",
             expanded=False,
         ):
             c1, c2, c3, c4 = st.columns(4)
+            safe_budget_fmt = escape_text(format_currency(ev.get("budget", 0), curr))
+            per_guest_calc = ev.get("budget", 0) / max(1, ev.get("guest_count", 1))
+            safe_per_guest_fmt = escape_text(format_currency(per_guest_calc, curr))
             with c1:
-                st.markdown(f"<div style='background: #191320; border: 1px solid #2E2538; border-radius: 8px; padding: 0.6rem 0.8rem;'><div style='color: #B9ADBF; font-size: 0.78rem; text-transform: uppercase; font-weight: 600;'>Date</div><div style='font-size: 1rem; font-weight: 600; color: #F5F0EA;'>{ev['date']}</div></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='background: #191320; border: 1px solid #786694; border-radius: 8px; padding: 0.6rem 0.8rem;'><div style='color: #B9ADBF; font-size: 0.78rem; text-transform: uppercase; font-weight: 600;'>Date</div><div style='font-size: 1rem; font-weight: 600; color: #F5F0EA;'>{safe_ev_date}</div></div>", unsafe_allow_html=True)
             with c2:
-                st.markdown(f"<div style='background: #191320; border: 1px solid #2E2538; border-radius: 8px; padding: 0.6rem 0.8rem;'><div style='color: #B9ADBF; font-size: 0.78rem; text-transform: uppercase; font-weight: 600;'>Guests</div><div style='font-size: 1rem; font-weight: 600; color: #F5F0EA;'>{ev['guest_count']:,}</div></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='background: #191320; border: 1px solid #786694; border-radius: 8px; padding: 0.6rem 0.8rem;'><div style='color: #B9ADBF; font-size: 0.78rem; text-transform: uppercase; font-weight: 600;'>Guests</div><div style='font-size: 1rem; font-weight: 600; color: #F5F0EA;'>{ev.get('guest_count', 0):,}</div></div>", unsafe_allow_html=True)
             with c3:
-                st.markdown(f"<div style='background: #191320; border: 1px solid #2E2538; border-radius: 8px; padding: 0.6rem 0.8rem;'><div style='color: #B9ADBF; font-size: 0.78rem; text-transform: uppercase; font-weight: 600;'>Budget</div><div style='font-size: 1rem; font-weight: 600; color: #C5A059;'>{format_currency(ev['budget'], curr)}</div></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='background: #191320; border: 1px solid #786694; border-radius: 8px; padding: 0.6rem 0.8rem;'><div style='color: #B9ADBF; font-size: 0.78rem; text-transform: uppercase; font-weight: 600;'>Budget</div><div style='font-size: 1rem; font-weight: 600; color: #C5A059;'>{safe_budget_fmt}</div></div>", unsafe_allow_html=True)
             with c4:
-                st.markdown(f"<div style='background: #191320; border: 1px solid #2E2538; border-radius: 8px; padding: 0.6rem 0.8rem;'><div style='color: #B9ADBF; font-size: 0.78rem; text-transform: uppercase; font-weight: 600;'>Per Guest</div><div style='font-size: 1rem; font-weight: 600; color: #6CB8A8;'>{format_currency(ev['budget'] / max(1, ev['guest_count']), curr)}</div></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='background: #191320; border: 1px solid #786694; border-radius: 8px; padding: 0.6rem 0.8rem;'><div style='color: #B9ADBF; font-size: 0.78rem; text-transform: uppercase; font-weight: 600;'>Per Guest</div><div style='font-size: 1rem; font-weight: 600; color: #6CB8A8;'>{safe_per_guest_fmt}</div></div>", unsafe_allow_html=True)
 
-            st.markdown(f"**Venue / Location:** {ev['location']}")
+            st.markdown(f"**Venue / Location:** {escape_text(ev.get('location', ''))}")
             if ev.get("theme"):
-                st.markdown(f"**Theme / Vibe:** {ev['theme']}")
+                st.markdown(f"**Theme / Vibe:** {escape_text(ev['theme'])}")
             if ev.get("preferences"):
-                st.markdown(f"**Special Notes:** {ev['preferences']}")
+                st.markdown(f"**Special Notes:** {escape_text(ev['preferences'])}")
 
             # AI Plan Details (Full Creative Narrative, Palette, Decor, Culinary, Activities, Tips)
             ai_plan = ev.get("ai_plan")
             if ai_plan:
                 st.markdown("---")
-                if ai_plan.get("_generation_mode") == "Deterministic Fallback":
-                    fb_reason = ai_plan.get("_fallback_reason", "Deterministic rule-based planning.")
-                    st.warning(f"⚙️ **Deterministic Fallback Plan Active**: {fb_reason}")
-                else:
-                    st.caption("✨ Bespoke Creative Plan powered by Gemini AI")
-
-                st.markdown(f"#### 🎨 Creative Concept: {ai_plan.get('theme_concept', 'Bespoke Theme')}")
-                if ai_plan.get("theme_description"):
-                    st.markdown(
-                        f"""
-                        <div class="content-box" style="margin-bottom: 1rem;">
-                            <p style="font-size: 1.05rem; line-height: 1.6; color: #F4EEE7; margin: 0;">
-                                {ai_plan.get('theme_description', '')}
-                            </p>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-
-                if ai_plan.get("color_palette"):
-                    st.markdown("**Curated Colour Palette:**")
-                    palette_html = "".join([f'<span class="palette-chip">{c}</span>' for c in ai_plan.get("color_palette", [])])
-                    st.markdown(f'<div class="palette-container" style="margin-bottom: 1rem;">{palette_html}</div>', unsafe_allow_html=True)
-
-                col_dec, col_cul = st.columns(2)
-                with col_dec:
-                    st.markdown("#### 🌿 Decor & Styling Ideas")
-                    for dec in ai_plan.get("decor_highlights", []):
-                        st.markdown(f"- {dec}")
-
-                    st.markdown("#### 🎵 Activities & Entertainment")
-                    for ent in ai_plan.get("entertainment_ideas", []):
-                        st.markdown(f"- {ent}")
-
-                with col_cul:
-                    st.markdown("#### 🍸 Culinary & Beverage Concepts")
-                    for cul in ai_plan.get("menu_suggestions", []):
-                        st.markdown(f"- {cul}")
-
-                    st.markdown("#### 💡 Expert Planner Pro-Tips")
-                    for tip in ai_plan.get("planner_pro_tips", []):
-                        st.markdown(f"- {tip}")
+                render_ai_event_plan(ai_plan, heading_prefix="🎨 Creative Concept", heading_level=3)
 
             st.markdown("---")
             # Action controls
@@ -1200,20 +1313,21 @@ def page_my_events() -> None:
                     index=["Planning", "Confirmed", "Completed"].index(ev["status"])
                     if ev["status"] in ["Planning", "Confirmed", "Completed"]
                     else 0,
+                    help=f"Change planning status for '{ev['name']}'",
                     key=f"status_select_{ev['id']}",
                 )
                 if new_status != ev["status"]:
-                    if st.button("Apply Status Change", key=f"btn_apply_{ev['id']}"):
+                    if st.button(f"Apply Status for '{ev['name']}'", key=f"btn_apply_{ev['id']}", help=f"Update planning status of '{ev['name']}' to {new_status}"):
                         update_event_status(ev["id"], new_status)
-                        st.success(f"Updated status to {new_status}")
+                        set_notification(f"Updated status of celebration '{ev['name']}' to {new_status}.", level="success")
                         st.rerun()
 
             with col_act3:
                 st.write("")
                 st.write("")
-                if st.button("🗑️ Delete Event", key=f"del_ev_{ev['id']}"):
+                if st.button(f"🗑️ Delete '{ev['name']}'", key=f"del_ev_{ev['id']}", help=f"Permanently remove celebration '{ev['name']}' from database"):
                     delete_event(ev["id"])
-                    st.warning(f"Deleted event '{ev['name']}'")
+                    set_notification(f"Permanently removed celebration '{ev['name']}' from database.", level="warning")
                     st.rerun()
 
 
@@ -1229,15 +1343,14 @@ def page_budget_planner() -> None:
         unsafe_allow_html=True,
     )
 
-    events = list_events()
-    if not events:
-        st.info("No events found. Please create an event first.")
-        return
+    render_notifications()
 
-    # Select event
-    event_options = {f"{e['name']} ({e['date']})": e["id"] for e in events}
-    selected_label = st.selectbox("Select Celebration", list(event_options.keys()))
-    selected_id = event_options[selected_label]
+    selected_id = render_event_selector(
+        key="budget_event_select",
+        help_text="Choose an event from your portfolio to manage its budget allocations and actual expenses",
+    )
+    if selected_id is None:
+        return
 
     current_event = get_event(selected_id)
     if not current_event:
@@ -1294,16 +1407,18 @@ def page_budget_planner() -> None:
             unsafe_allow_html=True,
         )
     with m4:
-        var_color = "#6CB8A8" if variance >= 0 else "#E07A5F"
-        var_label = "Under budget" if variance >= 0 else "Over budget"
+        var_color = sanitize_css_color("#6CB8A8" if variance >= 0 else "#E07A5F")
+        var_label = escape_text("Under budget" if variance >= 0 else "Over budget")
+        safe_variance_fmt = escape_text(format_currency(variance, curr))
+        safe_variance_diff = escape_text(f"{variance:+,.2f}")
         st.markdown(
             f"""
             <div class="metric-card">
                 <div>
                     <div class="metric-label">Remaining Variance</div>
-                    <div class="metric-value" style="font-size: 1.55rem; color: {var_color};">{format_currency(variance, curr)}</div>
+                    <div class="metric-value" style="font-size: 1.55rem; color: {var_color};">{safe_variance_fmt}</div>
                 </div>
-                <div class="metric-sub" style="color: {var_color};">{var_label} ({variance:+,.2f})</div>
+                <div class="metric-sub" style="color: {var_color};">{var_label} ({safe_variance_diff})</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1315,7 +1430,7 @@ def page_budget_planner() -> None:
     col_chart, col_tbl = st.columns([1, 1])
 
     with col_chart:
-        st.markdown("### Budget Allocations")
+        st.markdown("## Budget Allocations")
         if budget_items:
             df_chart = pd.DataFrame(
                 [
@@ -1351,7 +1466,7 @@ def page_budget_planner() -> None:
                         "Category:N",
                         scale=alt.Scale(
                             range=[
-                                "#2E6F68",
+                                "#6CB8A8",
                                 "#C5A059",
                                 "#9B5DE5",
                                 "#E07A5F",
@@ -1370,7 +1485,7 @@ def page_budget_planner() -> None:
             st.altair_chart(chart, width="stretch")
 
     with col_tbl:
-        st.markdown("### Category Summary")
+        st.markdown("## Category Summary")
         df_summary = pd.DataFrame(
             [
                 {
@@ -1386,7 +1501,7 @@ def page_budget_planner() -> None:
 
     # Interactive Expense Updater
     st.markdown("---")
-    st.markdown("### Update Actual Spending & Invoices")
+    st.markdown("## Update Actual Spending & Invoices")
 
     for item in budget_items:
         with st.expander(
@@ -1399,19 +1514,25 @@ def page_budget_planner() -> None:
                     value=float(item["actual_amount"]),
                     step=10.0,
                     key=f"act_spend_{item['id']}",
+                    help=f"Record actual invoiced expense for {item['category']}",
                 )
             with c_input2:
                 new_notes = st.text_input(
                     "Expense Notes / Vendor",
                     value=item.get("notes") or "",
                     key=f"notes_spend_{item['id']}",
+                    help=f"Add vendor name, invoice reference, or notes for {item['category']}",
                 )
             with c_btn:
                 st.write("")
                 st.write("")
-                if st.button("Save", key=f"save_b_{item['id']}"):
+                if st.button(
+                    f"Save {item['category']} Budget",
+                    key=f"save_b_{item['id']}",
+                    help=f"Save actual spending and notes for {item['category']}",
+                ):
                     update_budget_actual(item["id"], new_actual, notes=new_notes)
-                    st.success("Updated!")
+                    set_notification(f"Updated actual spending and notes for {item['category']}.", level="success")
                     st.rerun()
 
 
@@ -1427,14 +1548,14 @@ def page_timeline() -> None:
         unsafe_allow_html=True,
     )
 
-    events = list_events()
-    if not events:
-        st.info("No events found. Please create an event first.")
-        return
+    render_notifications()
 
-    event_options = {f"{e['name']} ({e['date']})": e["id"] for e in events}
-    selected_label = st.selectbox("Select Celebration", list(event_options.keys()))
-    selected_id = event_options[selected_label]
+    selected_id = render_event_selector(
+        key="timeline_event_select",
+        help_text="Choose an event from your portfolio to inspect its milestone and day-of timeline",
+    )
+    if selected_id is None:
+        return
 
     timeline_items = get_timeline_items(selected_id)
     if not timeline_items:
@@ -1454,15 +1575,17 @@ def page_timeline() -> None:
     tab_milestones, tab_dayof = st.tabs(["📅 Master Milestones", "⏰ Day-Of Run-of-Show"])
 
     with tab_milestones:
+        st.markdown("## Master Milestones")
         milestones = [t for t in timeline_items if t.get("category") == "Milestone"]
         for m in milestones:
             col_check, col_info = st.columns([1, 11])
             with col_check:
                 is_done = st.checkbox(
-                    "Done",
+                    f"Mark completed: {m['title']} ({m['timeframe']})",
                     value=bool(m["is_completed"]),
                     key=f"chk_m_{m['id']}",
                     label_visibility="collapsed",
+                    help=f"Toggle completion for {m['title']} ({m['timeframe']})",
                 )
                 if is_done != bool(m["is_completed"]):
                     toggle_timeline_completed(m["id"], is_done)
@@ -1472,27 +1595,32 @@ def page_timeline() -> None:
                 card_class = "timeline-card-completed" if m["is_completed"] else "timeline-card"
                 tag_class = "timeline-tag-completed" if m["is_completed"] else "timeline-tag"
                 title_class = "timeline-title-completed" if m["is_completed"] else "timeline-title"
+                safe_timeframe = escape_text(m.get("timeframe", ""))
+                safe_title = escape_text(m.get("title", ""))
+                safe_desc = escape_text(m.get("description", ""))
                 st.markdown(
                     f"""
                     <div class="{card_class}">
-                        <span class="{tag_class}">{m['timeframe']}</span>
-                        <h4 class="{title_class}">{m['title']}</h4>
-                        <p class="timeline-desc">{m['description']}</p>
+                        <span class="{tag_class}">{safe_timeframe}</span>
+                        <h3 class="{title_class}">{safe_title}</h3>
+                        <p class="timeline-desc">{safe_desc}</p>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
     with tab_dayof:
+        st.markdown("## Day-Of Run-of-Show")
         day_of_items = [t for t in timeline_items if t.get("category") == "Day-Of"]
         for d in day_of_items:
             col_check, col_info = st.columns([1, 11])
             with col_check:
                 is_done = st.checkbox(
-                    "Done",
+                    f"Mark completed: {d['title']} ({d['timeframe']})",
                     value=bool(d["is_completed"]),
                     key=f"chk_d_{d['id']}",
                     label_visibility="collapsed",
+                    help=f"Toggle completion for {d['title']} ({d['timeframe']})",
                 )
                 if is_done != bool(d["is_completed"]):
                     toggle_timeline_completed(d["id"], is_done)
@@ -1502,12 +1630,15 @@ def page_timeline() -> None:
                 card_class = "timeline-card-completed" if d["is_completed"] else "timeline-card"
                 tag_class = "timeline-tag-completed" if d["is_completed"] else "timeline-tag"
                 title_class = "timeline-title-completed" if d["is_completed"] else "timeline-title"
+                safe_timeframe = escape_text(d.get("timeframe", ""))
+                safe_title = escape_text(d.get("title", ""))
+                safe_desc = escape_text(d.get("description", ""))
                 st.markdown(
                     f"""
                     <div class="{card_class}">
-                        <span class="{tag_class}">{d['timeframe']}</span>
-                        <h4 class="{title_class}">{d['title']}</h4>
-                        <p class="timeline-desc">{d['description']}</p>
+                        <span class="{tag_class}">{safe_timeframe}</span>
+                        <h3 class="{title_class}">{safe_title}</h3>
+                        <p class="timeline-desc">{safe_desc}</p>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -1526,14 +1657,14 @@ def page_vendor_checklist() -> None:
         unsafe_allow_html=True,
     )
 
-    events = list_events()
-    if not events:
-        st.info("No events found. Please create an event first.")
-        return
+    render_notifications()
 
-    event_options = {f"{e['name']} ({e['date']})": e["id"] for e in events}
-    selected_label = st.selectbox("Select Celebration", list(event_options.keys()))
-    selected_id = event_options[selected_label]
+    selected_id = render_event_selector(
+        key="vendor_event_select",
+        help_text="Choose an event from your portfolio to manage vendor contracts and status",
+    )
+    if selected_id is None:
+        return
 
     current_event = get_event(selected_id)
     curr = current_event.get("currency", "USD") if current_event else "USD"
@@ -1577,7 +1708,7 @@ def page_vendor_checklist() -> None:
         )
     with col3:
         pending_count = len(vendor_items) - booked_count
-        pending_color = "#F0B36C" if pending_count > 0 else "#6CB8A8"
+        pending_color = sanitize_css_color("#F0B36C" if pending_count > 0 else "#6CB8A8")
         st.markdown(
             f"""
             <div class="metric-card">
@@ -1592,7 +1723,7 @@ def page_vendor_checklist() -> None:
         )
 
     st.write("")
-    st.markdown("### Vendor Roster")
+    st.markdown("## Vendor Roster")
 
     for v in vendor_items:
         est_fmt = format_currency(v["estimated_cost"], curr)
@@ -1607,6 +1738,7 @@ def page_vendor_checklist() -> None:
                     "Vendor / Business Name",
                     value=v["name"],
                     key=f"v_name_{v['id']}",
+                    help=f"Company or partner name for {v['category']}",
                 )
             with c_status:
                 v_status = st.selectbox(
@@ -1616,6 +1748,7 @@ def page_vendor_checklist() -> None:
                     if v["status"] in ["Needed", "Researching", "Contacted", "Booked", "Paid"]
                     else 0,
                     key=f"v_stat_{v['id']}",
+                    help=f"Procurement stage for {v['name'] or v['category']}",
                 )
             with c_cost:
                 v_cost = st.number_input(
@@ -1623,11 +1756,17 @@ def page_vendor_checklist() -> None:
                     value=float(v["actual_cost"]),
                     step=10.0,
                     key=f"v_cost_{v['id']}",
+                    help=f"Actual contracted cost for {v['name'] or v['category']}",
                 )
             with c_save:
                 st.write("")
                 st.write("")
-                if st.button("Save", key=f"v_save_btn_{v['id']}"):
+                v_title = v["name"].strip() if v.get("name") and v["name"].strip() else v["category"]
+                if st.button(
+                    f"Save {v_title}",
+                    key=f"v_save_btn_{v['id']}",
+                    help=f"Save updated vendor details for {v_title}",
+                ):
                     update_vendor_item(
                         v["id"],
                         name=v_name,
@@ -1635,7 +1774,7 @@ def page_vendor_checklist() -> None:
                         actual_cost=v_cost,
                         notes=v.get("notes") or "",
                     )
-                    st.success("Vendor record saved!")
+                    set_notification(f"Saved vendor record for '{v_title}'.", level="success")
                     st.rerun()
 
 
