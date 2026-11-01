@@ -90,3 +90,13 @@ def test_render_currency_budget_chart_empty() -> None:
     with patch("streamlit.info") as mock_info:
         app.render_currency_budget_chart("USD", [])
         mock_info.assert_called_once_with("No celebrations recorded in USD.")
+
+
+def test_get_cached_event_summaries_delegates_to_list_events() -> None:
+    """Verify get_cached_event_summaries retrieves events without full AI plan deserialisation."""
+    with patch("app.list_events", return_value=[{"id": 1, "name": "Test Event"}]) as mock_list_events:
+        # Clear cache first to test actual call
+        app.get_cached_event_summaries.clear()
+        results = app.get_cached_event_summaries()
+        assert results == [{"id": 1, "name": "Test Event"}]
+        mock_list_events.assert_called_once_with(include_plan=False)

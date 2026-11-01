@@ -8,6 +8,14 @@ and Warm Ivory (#F4EEE7).
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Ensure application root directory is prioritized on sys.path for Streamlit Cloud deployment
+_APP_ROOT = Path(__file__).resolve().parent
+if str(_APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(_APP_ROOT))
+
 from datetime import date, datetime
 from typing import Any
 
@@ -25,7 +33,6 @@ from services.database import (
     get_vendor_items,
     init_db,
     list_events,
-    list_event_summaries,
     save_event,
     toggle_timeline_completed,
     update_budget_actual,
@@ -519,7 +526,7 @@ def get_cached_dashboard_metrics() -> dict[str, Any]:
 @st.cache_data(show_spinner=False, ttl=60)
 def get_cached_event_summaries() -> list[dict[str, Any]]:
     """Retrieve and cache lightweight event summaries without full AI plan deserialisation."""
-    return list_event_summaries()
+    return list_events(include_plan=False)
 
 
 def render_sidebar() -> str:
